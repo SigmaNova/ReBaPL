@@ -1,4 +1,5 @@
 import os.path as osp
+import math
 
 import torch
 import torch.nn as nn
@@ -175,7 +176,6 @@ class CustomCLIP(nn.Module):
 
         return logits
 
-
 @TRAINER_REGISTRY.register()
 class IVLP(TrainerX):
     def check_cfg(self, cfg):
@@ -219,19 +219,34 @@ class IVLP(TrainerX):
         trainable_params = [param for param in self.model.parameters() if param.requires_grad]
 
         self.model.to(self.device)
-        # NOTE: only give prompt_learner to the optimizer
-        self.optim = build_optimizer(self.model, cfg.OPTIM)
-        self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
-        self.register_model("VLPromptLearner", self.model, self.optim, self.sched)
+        
+        # Handmade SGD optimizer
+        self.base_lr = cfg.OPTIM.LR
+        self.weight_decay = getattr(cfg.OPTIM, 'WEIGHT_DECAY', 0.0)
+        self.momentum = getattr(cfg.OPTIM, 'MOMENTUM', 0.9)
+        self.trainable_params = trainable_params
+        
+        # Initialize momentum buffers
+        self.momentum_buffers = [torch.zeros_like(p) for p in self.trainable_params]
+        
+        # Scheduler parameters
+        self.max_epochs = cfg.OPTIM.MAX_EPOCH
+        self.warmup_epochs = cfg.OPTIM.WARMUP_EPOCH
+        self.warmup_lr = cfg.OPTIM.WARMUP_CONS_LR
+        self.lr_scheduler_type = cfg.OPTIM.LR_SCHEDULER
+        self.current_lr = self.base_lr
+        
+        print("--- Handmade IVLP Optimizer ---")
+        print(f"  Base LR: {self.base_lr}")
+        print(f"  Weight Decay: {self.weight_decay}")
+        print(f"  Momentum: {self.momentum}")
+        print(f"  Trainable params: {len(trainable_params)}")
+        print(f"  Max epochs: {self.max_epochs}")
+        print(f"  Warmup epochs: {self.warmup_epochs}")
+        print(f"  Warmup LR: {self.warmup_lr}")
+        print(f"  LR Scheduler: {self.lr_scheduler_type}")
 
-        print("--- Baseline IVLP Optimizer ---")
-        for i, group in enumerate(self.optim.param_groups):
-            print(f"  Group {i}:")
-            print(f"    LR: {group['lr']}")
-            print(f"    Weight Decay: {group['weight_decay']}")
-            print(f"    Num Params: {len(group['params'])}")
-            print(f"    trainable params: {len(trainable_params)}")
-
+        self.register_model("VLPromptLearner", self.model, None, None)
 
         self.scaler = GradScaler() if cfg.TRAINER.IVLP.PREC == "amp" else None
 
@@ -242,26 +257,67 @@ class IVLP(TrainerX):
             print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
             self.model = nn.DataParallel(self.model)
 
+    def get_current_lr(self):
+        """Calculate current learning rate based on epoch"""
+        epoch = self.epoch + 1  # epoch is 0-indexed
+        if epoch < self.warmup_epochs:
+            # Warmup phase
+            return self.warmup_lr
+        else:
+            # Post-warmup phase
+            if self.lr_scheduler_type == "cosine":
+                # Cosine annealing
+                progress = (epoch - self.warmup_epochs) / (self.max_epochs - self.warmup_epochs)
+                return self.base_lr * 0.5 * (1 + math.cos(math.pi * progress))
+            else:
+                # Default to constant learning rate
+                return self.base_lr
+
+    def sgd_step(self):
+        """Handmade SGD step"""
+        for i, param in enumerate(self.trainable_params):
+            if param.grad is None:
+                continue
+                
+            grad = param.grad.data
+            
+            # Apply weight decay
+            if self.weight_decay != 0:
+                grad = grad.add(param.data, alpha=self.weight_decay)
+            
+            # Apply momentum
+            buf = self.momentum_buffers[i]
+            buf.mul_(self.momentum).add_(grad)
+            
+            # Update parameters
+            param.data.add_(buf, alpha=-self.current_lr)
+
+    def zero_grad(self):
+        """Zero gradients for trainable parameters"""
+        for param in self.trainable_params:
+            if param.grad is not None:
+                param.grad.zero_()
+
     def forward_backward(self, batch):
         image, label = self.parse_batch_train(batch)
 
         model = self.model
-        optim = self.optim
         scaler = self.scaler
 
         prec = self.cfg.TRAINER.IVLP.PREC
         if prec == "amp":
             with autocast():
                 loss = model(image, label)
-            optim.zero_grad()
+            self.zero_grad()
             scaler.scale(loss).backward()
-            scaler.step(optim)
+            scaler.unscale_(None)  # Unscale before custom optimizer step
+            self.sgd_step()
             scaler.update()
         else:
             loss = model(image, label)
-            optim.zero_grad()
+            self.zero_grad()
             loss.backward()
-            optim.step()
+            self.sgd_step()
 
         loss_summary = {"loss": loss.item()}
 
@@ -269,6 +325,12 @@ class IVLP(TrainerX):
             self.update_lr()
 
         return loss_summary
+
+    def update_lr(self):
+        """Update learning rate at the end of each epoch"""
+        current_epoch = self.epoch + 1  # epoch is 0-indexed
+        self.current_lr = self.get_current_lr()
+        print(f"Epoch {current_epoch}: Learning rate updated to {self.current_lr:.6f}")
 
     def parse_batch_train(self, batch):
         input = batch["img"]
