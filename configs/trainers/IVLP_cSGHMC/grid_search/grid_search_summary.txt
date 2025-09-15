@@ -1,0 +1,25 @@
+Grid Search Parameter Combinations
+==================================
+
+Total configurations: 16
+
+Parameters tested:
+BETA: [0.7, 0.8, 0.9, 0.95]
+ALPHA: [0.001, 0.01, 0.05, 0.1]
+------------------------------------------------------------
+BETA: 0.70, ALPHA: 0.001
+BETA: 0.70, ALPHA: 0.010
+BETA: 0.70, ALPHA: 0.050
+BETA: 0.70, ALPHA: 0.100
+BETA: 0.80, ALPHA: 0.001
+BETA: 0.80, ALPHA: 0.010
+BETA: 0.80, ALPHA: 0.050
+BETA: 0.80, ALPHA: 0.100
+BETA: 0.90, ALPHA: 0.001
+BETA: 0.90, ALPHA: 0.010
+BETA: 0.90, ALPHA: 0.050
+BETA: 0.90, ALPHA: 0.100
+BETA: 0.95, ALPHA: 0.001
+BETA: 0.95, ALPHA: 0.010
+BETA: 0.95, ALPHA: 0.050
+BETA: 0.95, ALPHA: 0.100

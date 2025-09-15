@@ -1,5 +1,8 @@
 import os.path as osp
+import os
 import math
+import glob
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -7,7 +10,6 @@ from torch.nn import functional as F
 from torch.cuda.amp import GradScaler, autocast
 
 from dassl.engine import TRAINER_REGISTRY, TrainerX
-from dassl.metrics import compute_accuracy
 from dassl.utils import load_pretrained_weights, load_checkpoint
 from dassl.optim import build_optimizer, build_lr_scheduler
 
@@ -15,147 +17,6 @@ from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 
 _tokenizer = _Tokenizer()
-
-class cSGHMC_Optimizer:
-    """Contour Stochastic Gradient Hamiltonian Monte Carlo optimizer
-    
-    Based on the original cSGHMC paper implementation with proper cosine annealing
-    and temperature-controlled noise injection during sampling phase.
-    """
-    def __init__(self, params, lr=0.5, alpha=0.9, temperature=1./50000, weight_decay=5e-4, 
-                 total_epochs=200, datasize=100, M=2, cycle_length=None, 
-                 warmup_epochs=1, warmup_lr=1e-5): # Add warmup parameters
-        self.params = list(params)
-        self.lr_0 = lr  # initial learning rate
-        self.alpha = alpha  # friction coefficient (1.0 = SGLD, <1.0 = SGHMC)
-        self.temperature = temperature
-        self.weight_decay = weight_decay
-        self.total_epochs = total_epochs
-        self.datasize = datasize
-        
-        # Cosine annealing parameters - configurable
-        self.M = M  # number of cycles
-        self.cycle_length = cycle_length if cycle_length is not None else total_epochs // self.M
-        self.current_epoch = 0
-        self.current_batch = 0
-        self.batches_per_epoch = 3  # will be updated based on actual data
-
-        # Warmup parameters
-        self.warmup_epochs = warmup_epochs
-        self.warmup_lr = warmup_lr
-        
-        # Initialize momentum buffers (called 'buf' in original implementation)
-        self.momentum_buffer = []
-        for param in self.params:
-            self.momentum_buffer.append(torch.zeros_like(param.data))
-            
-        # Add param_groups for compatibility with Dassl
-        self.param_groups = [{'lr': lr, 'params': self.params}]
-    
-    def zero_grad(self):
-        for param in self.params:
-            if param.grad is not None:
-                param.grad.zero_()
-    
-    def update_epoch(self, epoch, batches_per_epoch=3):
-        """Update epoch information for cosine annealing schedule"""
-        self.current_epoch = epoch
-        self.batches_per_epoch = batches_per_epoch
-        self.current_batch = 0
-    
-    def get_current_lr(self):
-        """
-        Compute current learning rate with warmup at the start of each cycle.
-        This now updates at each batch for more fine-grained control.
-        """
-        # Calculate total batches processed so far
-        total_batches_so_far = self.current_epoch * self.batches_per_epoch + self.current_batch
-        
-        # Calculate which cycle we're in based on total batches
-        total_batches_per_cycle = self.cycle_length * self.batches_per_epoch
-        current_cycle = total_batches_so_far // total_batches_per_cycle
-        batch_in_cycle = total_batches_so_far % total_batches_per_cycle
-        
-        # First batch of each cycle is warmup
-        if batch_in_cycle == 0:
-            return self.warmup_lr
-        
-        # For other batches in the cycle, apply cosine annealing
-        annealing_batches_per_cycle = total_batches_per_cycle - 1
-        if annealing_batches_per_cycle <= 0:
-            return self.warmup_lr
-        
-        # Calculate how far we are into the annealing phase (BATCH-LEVEL)
-        batches_into_annealing = batch_in_cycle - 1
-        
-        # Cosine annealing formula applied at the BATCH level
-        cos_inner = math.pi * batches_into_annealing / annealing_batches_per_cycle
-        cos_out = math.cos(cos_inner) + 1
-        lr = 0.5 * cos_out * self.lr_0
-        
-        return lr
-    
-    def is_sampling_phase(self):
-        """Check if we're in the sampling phase (last epoch of each cycle)
-        
-        Generic implementation that works for any cycle length:
-        - Sample at the last epoch of each cycle
-        """
-        epoch_in_cycle = (self.current_epoch % self.cycle_length) + 1
-        return epoch_in_cycle == self.cycle_length  # Sample only at the last epoch of each cycle
-    
-    def step(self):
-        """One step of cSGHMC update following the original implementation"""
-        lr = self.get_current_lr()
-        is_sampling = self.is_sampling_phase()
-        
-        for i, param in enumerate(self.params):
-            if param.grad is None:
-                continue
-                
-            grad = param.grad.data
-            momentum = self.momentum_buffer[i]
-            # momentum = 0
-            
-            # # Add weight decay to gradient
-            grad = grad + self.weight_decay * param.data
-            
-            # Update momentum: buf_new = (1-alpha)*buf - lr*grad
-            momentum_new = (1 - self.alpha) * momentum - lr * grad
-            
-            # Add temperature-controlled noise during sampling phase
-            if is_sampling:
-                noise_std = math.sqrt(2.0 * lr * self.alpha * self.temperature / self.datasize)
-                noise = torch.randn_like(param.data) * noise_std
-                momentum_new = momentum_new + noise * self.temperature
-
-            # Update parameters: param = param + momentum_new
-            param.data.add_(momentum_new)
-            
-            # Store updated momentum
-            self.momentum_buffer[i] = momentum_new
-        
-        # Update batch counter
-        self.current_batch += 1
-        
-        # Update learning rate in param_groups for compatibility
-        self.param_groups[0]['lr'] = lr
-    
-    def state_dict(self):
-        """Return state dictionary for checkpointing"""
-        return {
-            'momentum_buffer': self.momentum_buffer,
-            'param_groups': self.param_groups,
-            'current_epoch': self.current_epoch,
-            'current_batch': self.current_batch,
-        }
-    
-    def load_state_dict(self, state_dict):
-        """Load state dictionary from checkpoint"""
-        self.momentum_buffer = state_dict['momentum_buffer']
-        self.param_groups = state_dict['param_groups']
-        self.current_epoch = state_dict.get('current_epoch', 0)
-        self.current_batch = state_dict.get('current_batch', 0)
 
 
 def load_clip_to_cpu(cfg):
@@ -318,7 +179,6 @@ class CustomCLIP(nn.Module):
 
         return logits
 
-
 @TRAINER_REGISTRY.register()
 class IVLP_cSGHMC(TrainerX):
     def check_cfg(self, cfg):
@@ -358,60 +218,38 @@ class IVLP_cSGHMC(TrainerX):
 
         if cfg.MODEL.INIT_WEIGHTS:
             load_pretrained_weights(self.model, cfg.MODEL.INIT_WEIGHTS)
-
-        self.model.to(self.device)
-
+        
         trainable_params = [param for param in self.model.parameters() if param.requires_grad]
 
-        sghmc_beta = getattr(cfg.TRAINER, 'CSGHMC', {}).get('BETA', 0.9)  # momentum parameter
-        sghmc_alpha = getattr(cfg.TRAINER, 'CSGHMC', {}).get('ALPHA', 0.01)  # friction coefficient
-        temp_start = getattr(cfg.TRAINER, 'CSGHMC', {}).get('TEMP_START', 1.0)  # starting temperature
-        temp_end = getattr(cfg.TRAINER, 'CSGHMC', {}).get('TEMP_END', 0.1)  # ending temperature
-        cycle_length = getattr(cfg.TRAINER, 'CSGHMC', {}).get('CYCLE_LENGTH', 5)  # epochs per cycle
-        M = getattr(cfg.TRAINER, 'CSGHMC', {}).get('M', 2)  # number of cycles
-        max_samples = getattr(cfg.TRAINER, 'CSGHMC', {}).get('MAX_SAMPLES', 20)  # max samples in memory
-        sample_at_end = getattr(cfg.TRAINER, 'CSGHMC', {}).get('SAMPLE_AT_END', True)  # sampling strategy
-        csghmc_weight_decay = getattr(cfg.TRAINER, 'CSGHMC', {}).get('WEIGHT_DECAY', 5e-4)  # cSGHMC weight decay
+        self.model.to(self.device)
         
-        total_epochs = cfg.OPTIM.MAX_EPOCH
-        dataset_size = 100  # approximated for few-shot learning (will be updated)
-
-        warmup_epochs = cfg.OPTIM.WARMUP_EPOCH
-        warmup_lr = cfg.OPTIM.WARMUP_CONS_LR
+        # Create real PyTorch optimizer but override its step method
+        self.optim = build_optimizer(self.model, cfg.OPTIM)
+        self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
+        self.register_model("VLPromptLearner", self.model, self.optim, self.sched)
         
-        print(f"Using cSGHMC with beta={sghmc_beta}, alpha={sghmc_alpha}, temp_start={temp_start}, temp_end={temp_end}, cycle_length={cycle_length}, M={M}, max_samples={max_samples}")
-        self.sghmc_optim = cSGHMC_Optimizer(
-            trainable_params,
-            lr=cfg.OPTIM.LR,  # Use the standard learning rate from config
-            alpha=sghmc_alpha,
-            temperature=temp_start,  # Start with initial temperature
-            weight_decay=csghmc_weight_decay,  # Use configurable weight decay
-            total_epochs=total_epochs,
-            datasize=dataset_size,
-            M=M,  # Pass configurable number of cycles
-            cycle_length=cycle_length,  # Pass configurable cycle length
-            warmup_epochs=warmup_epochs,  # Pass warmup params
-            warmup_lr=warmup_lr  # Pass warmup params
-        )
+        # Store scheduler parameters for handmade scheduling
+        self.base_lr = cfg.OPTIM.LR
+        self.max_epochs = cfg.OPTIM.MAX_EPOCH
+        self.warmup_epochs = cfg.OPTIM.WARMUP_EPOCH
+        self.warmup_lr = cfg.OPTIM.WARMUP_CONS_LR
+        self.lr_scheduler_type = cfg.OPTIM.LR_SCHEDULER
+        
+        # Store trainable params and momentum buffers for handmade SGD
+        self.trainable_params = trainable_params
+        self.momentum_buffers = [torch.zeros_like(p) for p in self.trainable_params]
+        
+        self.original_optim_step = self.optim.step
+        self.original_sched_step = self.sched.step
+        self.optim.step = self.handmade_sgd_step
+        # self.sched.step = self.handmade_scheduler_step  # Override scheduler step
 
-        print("--- Custom cSGHMC Optimizer ---")
-        for i, group in enumerate(self.sghmc_optim.param_groups):
-            print(f"  Group {i}:")
-            print(f"    LR: {group['lr']}")
-            print(f"    Weight Decay: {self.sghmc_optim.weight_decay}") # You stored it separately
-            print(f"    Num Params: {len(group['params'])}")
+        print("--- Handmade IVLP Optimizer with Dassl Scheduler ---")
+        print(f"  Base LR: {cfg.OPTIM.LR}")
+        print(f"  Weight Decay: {getattr(cfg.OPTIM, 'WEIGHT_DECAY', 0.0)}")
+        print(f"  Momentum: {getattr(cfg.OPTIM, 'MOMENTUM', 0.9)}")
+        print(f"  Trainable params: {len(trainable_params)}")
 
-        self.register_model("VLPromptLearner", self.model, self.sghmc_optim, None)
-        # Keep track of samples for Bayesian averaging and cycle parameters
-        self.samples = []
-        self.sample_count = 0
-        self.cycle_length = cycle_length
-        self.total_cycles = M
-        self.temp_start = temp_start
-        self.temp_end = temp_end
-        self.max_samples = max_samples
-        self.sample_at_end = sample_at_end
-        self.last_sampled_epoch = -1  # Track to avoid multiple samples per epoch
 
         self.scaler = GradScaler() if cfg.TRAINER.IVLP.PREC == "amp" else None
 
@@ -419,296 +257,39 @@ class IVLP_cSGHMC(TrainerX):
         # big, which slows down the copy operation in DataParallel
         device_count = torch.cuda.device_count()
         if device_count > 1:
-            print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
+            print(f"Multiple GPUs detected (n_gpts={device_count}), use all of them!")
             self.model = nn.DataParallel(self.model)
 
-    def before_epoch(self):
-        """Hook executed before each epoch."""
-        super().before_epoch()
-        # Update optimizer with current epoch info (for cosine annealing)
-        # This should be done once per epoch, not per batch.
-        self.sghmc_optim.update_epoch(self.epoch, batches_per_epoch=len(self.train_loader_x))
+    def handmade_sgd_step(self, closure=None):
+        """Our handmade SGD step using current LR from the real optimizer"""
+        current_lr = self.optim.param_groups[0]['lr']
+        weight_decay = self.optim.param_groups[0]['weight_decay']
+        momentum = self.optim.param_groups[0]['momentum']
 
-    def forward_backward(self, batch):
-        image, label = self.parse_batch_train(batch)
         
-        # Update optimizer with current epoch info (for cosine annealing)
-        # self.sghmc_optim.update_epoch(self.epoch, batches_per_epoch=len(self.train_loader_x))
-        
-        model = self.model
-        optim = self.sghmc_optim
-        scaler = self.scaler
-
-        prec = self.cfg.TRAINER.IVLP.PREC
-        if prec == "amp":
-            with autocast():
-                loss = model(image, label)
-            optim.zero_grad()
-            scaler.scale(loss).backward()
-            scaler.step(optim)
-            scaler.update()
-        else:
-            loss = model(image, label)
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-    
-        # Collect samples based on configurable strategy
-        epoch_in_cycle = (self.epoch % self.cycle_length) + 1
-        
-        if self.sample_at_end:
-            # Sample only at the last epoch of each cycle
-            should_sample = epoch_in_cycle == self.cycle_length
-        else:
-            # Sample during the last portion of each cycle (like original cSGHMC)
-            last_portion = max(1, self.cycle_length // 5)  # Last 20% of cycle, minimum 1 epoch
-            should_sample = epoch_in_cycle > (self.cycle_length - last_portion)
-        
-        if should_sample and self.epoch != self.last_sampled_epoch:
-            sample_type = "end-of-cycle" if self.sample_at_end else "sampling-phase"
-            print(f"🎯 Collecting IVLP sample at epoch {self.epoch} (epoch {epoch_in_cycle}/{self.cycle_length} in cycle, {sample_type})")
-            self.collect_sample()
-            self.last_sampled_epoch = self.epoch
-
-        # Compute accuracy for monitoring
-        with torch.no_grad():
-            # Temporarily set to eval mode to get logits instead of loss
-            model.eval()
-            output = model(image)  # Get logits for accuracy computation
-            model.train()  # Set back to training mode
-            acc = compute_accuracy(output, label)[0].item()
-
-        loss_summary = {
-            "loss": loss.item(),
-            "acc": acc,
-            "n_samples": len(self.samples),
-            "current_lr": self.sghmc_optim.get_current_lr(),
-            "sampling_phase": self.sghmc_optim.is_sampling_phase(),
-            "epoch_in_cycle": (self.epoch % self.cycle_length) + 1,
-            "cycle_length": self.cycle_length,
-            "should_sample": (self.epoch % self.cycle_length) + 1 == self.cycle_length
-        }
-
-        return loss_summary
-    
-    def collect_sample(self):
-        """Collect current parameters as a sample for Bayesian averaging
-        
-        Collects samples at the end of each cycle based on configured cycle_length
-        """
-        sample = {}
-        for name, param in self.model.prompt_learner.named_parameters():
-            sample[name] = param.data.clone()
-        
-        # Add metadata about when this sample was collected
-        epoch_in_cycle = (self.epoch % self.cycle_length) + 1
-        cycle = (self.epoch // self.cycle_length) + 1
-        
-        sample_info = {
-            "epoch": self.epoch,
-            "cycle": cycle,
-            "epoch_in_cycle": epoch_in_cycle,
-            "cycle_length": self.cycle_length,
-            "parameters": sample
-        }
-        
-        self.samples.append(sample_info)
-        self.sample_count += 1
-        
-        print(f" Collected IVLP sample #{self.sample_count} from epoch {self.epoch} (cycle {cycle}, epoch {epoch_in_cycle}/{self.cycle_length})")
-        
-        # Keep only recent samples to manage memory (configurable)
-        if len(self.samples) > self.max_samples:
-            oldest = self.samples.pop(0)
-            print(f"🗑️  Removed oldest sample from epoch {oldest['epoch']} to manage memory (max_samples={self.max_samples})")
-    
-    
-    
-    def load_samples_from_files(self, output_dir):
-        """Load cSGHMC samples from individual epoch files"""
-        import glob
-        
-        # Look for csghmc_sample_epoch_*.pth files
-        sample_pattern = osp.join(output_dir, "csghmc_sample_epoch_*.pth")
-        sample_files = glob.glob(sample_pattern)
-        
-        if not sample_files:
-            print(f"⚠️  No sample files found in {output_dir}")
-            return []
-        
-        # Sort files by epoch number
-        sample_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
-        
-        print(f"🔍 Found {len(sample_files)} IVLP sample files:")
-        loaded_samples = []
-        
-        for sample_file in sample_files:
-            try:
-                # Extract epoch number from filename
-                epoch_num = int(osp.basename(sample_file).split('_')[-1].split('.')[0])
+        for i, param in enumerate(self.trainable_params):
+            if param.grad is None:
+                continue
                 
-                # Load the parameters
-                sample_params = torch.load(sample_file, weights_only=True)
-                
-                # Create sample info structure (use cycle_length from config or default)
-                cycle_length = self.cycle_length if hasattr(self, 'cycle_length') else 50  # Fallback to 50 for old files
-                sample_info = {
-                    "epoch": epoch_num,
-                    "cycle": (epoch_num // cycle_length) + 1,
-                    "epoch_in_cycle": (epoch_num % cycle_length) + 1,
-                    "cycle_length": cycle_length,
-                    "parameters": sample_params
-                }
-                
-                loaded_samples.append(sample_info)
-                print(f"  ✅ Loaded epoch {epoch_num} from {osp.basename(sample_file)}")
-                
-            except Exception as e:
-                print(f"  ❌ Failed to load {sample_file}: {e}")
-                
-        print(f"🎯 Successfully loaded {len(loaded_samples)} IVLP samples for ensemble")
-        return loaded_samples
-
-    @torch.no_grad()
-    def test(self, split=None):
-        """Override test to use Bayesian averaged parameters"""
-        self.set_model_mode("eval")
-        self.evaluator.reset()
-
-        if split is None:
-            split = self.cfg.TEST.SPLIT
-
-        if split == "val" and self.val_loader is not None:
-            data_loader = self.val_loader
-        else:
-            split = "test"  # in case val_loader is None
-            data_loader = self.test_loader
-
-        print(f"Evaluate on the *{split}* set")
-        
-        # Auto-load samples from files if not already loaded
-        if len(self.samples) == 0:
-            print("🔄 No samples in memory, searching for sample files...")
-            output_dir = getattr(self.cfg, 'OUTPUT_DIR', './output')
-            self.samples = self.load_samples_from_files(output_dir)
-        
-        if len(self.samples) > 0:
-            print(f"Using IVLP Bayesian ensemble averaging over {len(self.samples)} samples")
-            epochs = [s['epoch'] for s in self.samples]
-            print(f"Sample epochs: {epochs}")
+            grad = param.grad.data
             
-            # Evaluate individual samples first
-            print(f"\n{'='*60}")
-            print("📊 INDIVIDUAL SAMPLE PERFORMANCE:")
-            print(f"{'='*60}")
+            # Apply weight decay
+            if weight_decay != 0:
+                grad = grad.add(param.data, alpha=weight_decay)
             
-            individual_results = []
+            # Apply momentum
+            buf = self.momentum_buffers[i]
+            buf.mul_(momentum).add_(grad)
             
-            for i, sample_info in enumerate(self.samples):
-                # Reset evaluator for this sample
-                self.evaluator.reset()
-                
-                # Load this sample's parameters into the model
-                for name, param in self.model.prompt_learner.named_parameters():
-                    if name in sample_info["parameters"]:
-                        param.data.copy_(sample_info["parameters"][name])
-                
-                # Evaluate this sample on the entire test set
-                for batch_idx, batch in enumerate(data_loader):
-                    input, label = self.parse_batch_test(batch)
-                    output = self.model(input)
-                    self.evaluator.process(output, label)
-                
-                # Get results for this sample
-                sample_results = self.evaluator.evaluate()
-                sample_acc = list(sample_results.values())[0]  # Get the first metric (usually accuracy)
-                individual_results.append(sample_acc)
-                
-                # Print individual sample performance
-                cycle = sample_info.get('cycle', 'N/A')
-                epoch_in_cycle = sample_info.get('epoch_in_cycle', 'N/A')
-                print(f"  Sample {i+1:2d} (Epoch {sample_info['epoch']:2d}, Cycle {cycle}, Epoch {epoch_in_cycle}/{sample_info['cycle_length']}): {sample_acc:.4f}%")
-            
-            # Print summary statistics
-            print(f"\n📈 INDIVIDUAL SAMPLE STATISTICS:")
-            print(f"  Mean:   {sum(individual_results)/len(individual_results):.4f}%")
-            print(f"  Std:    {(sum([(x - sum(individual_results)/len(individual_results))**2 for x in individual_results]) / len(individual_results))**0.5:.4f}%")
-            print(f"  Min:    {min(individual_results):.4f}%")
-            print(f"  Max:    {max(individual_results):.4f}%")
-            print(f"  Range:  {max(individual_results) - min(individual_results):.4f}%")
-            
-            # Now evaluate ensemble
-            print(f"\n🎯 ENSEMBLE EVALUATION:")
-            print(f"{'='*30}")
-            
-            # Reset evaluator for ensemble evaluation
-            self.evaluator.reset()
-            
-            for batch_idx, batch in enumerate(data_loader):
-                input, label = self.parse_batch_test(batch)
-                
-                # True ensemble averaging: compute predictions from all samples
-                ensemble_probs = None
-                
-                for i, sample_info in enumerate(self.samples):
-                    # Load this sample's parameters into the model
-                    for name, param in self.model.prompt_learner.named_parameters():
-                        if name in sample_info["parameters"]:
-                            param.data.copy_(sample_info["parameters"][name])
-                    
-                    # Get logits from this sample
-                    logits = self.model(input)
-                    probs = logits
-                    
-                    # Accumulate probabilities
-                    if ensemble_probs is None:
-                        ensemble_probs = probs
-                    else:
-                        ensemble_probs += probs
-                
-                # Average the probabilities
-                ensemble_probs = ensemble_probs / len(self.samples)
-                output = ensemble_probs
-                
-                self.evaluator.process(output, label)
-        
-        else:
-            print("⚠️  No samples available - using single model inference")
-            
-            # Single model inference (fallback)
-            for batch_idx, batch in enumerate(data_loader):
-                input, label = self.parse_batch_test(batch)
-                output = self.model(input)
-                self.evaluator.process(output, label)
+            #sghmc noise
+            if self.epoch%20+1>15  :
+                temperature = 1.0
+                noise_std = math.sqrt(2 * weight_decay * current_lr)
+                noise = torch.randn_like(param) * noise_std / temperature
+                buf.add_(noise)
 
-        results = self.evaluator.evaluate()
-
-        for k, v in results.items():
-            tag = f"{split}/{k}"
-            self.write_scalar(tag, v, self.epoch)
-
-        # Print final ensemble results
-        if len(self.samples) > 0:
-            ensemble_acc = list(results.values())[0]
-            mean_individual = sum(individual_results) / len(individual_results)
-            improvement = ensemble_acc - mean_individual
-            
-            print(f"\n🏆 FINAL COMPARISON:")
-            print(f"  Ensemble Accuracy:     {ensemble_acc:.4f}%")
-            print(f"  Mean Individual:       {mean_individual:.4f}%")
-            print(f"  Ensemble Improvement:  {improvement:+.4f}%")
-            print(f"  Best Individual:       {max(individual_results):.4f}%")
-            print(f"  Ensemble vs Best:      {ensemble_acc - max(individual_results):+.4f}%")
-
-        return list(results.values())[0]
-
-
-    def parse_batch_train(self, batch):
-        input = batch["img"]
-        label = batch["label"]
-        input = input.to(self.device)
-        label = label.to(self.device)
-        return input, label
+            # Update parameters
+            param.data.add_(buf, alpha=-current_lr)
 
     def load_model(self, directory, epoch=None):
         if not directory:
@@ -743,86 +324,171 @@ class IVLP_cSGHMC(TrainerX):
             print("Loading weights to {} " 'from "{}" (epoch = {})'.format(name, model_path, epoch))
             # set strict=False
             self._models[name].load_state_dict(state_dict, strict=False)
-
-        # Auto-load samples from individual files or csghmc_samples.pth
-        samples_path = osp.join(directory, "csghmc_samples.pth")
-        if osp.exists(samples_path):
-            samples_data = torch.load(samples_path)
-            self.samples = samples_data.get("samples", [])
-            self.sample_count = samples_data.get("sample_count", 0)
-            print(f"✅ Loaded {len(self.samples)} IVLP cSGHMC samples from csghmc_samples.pth")
-            if self.samples:
-                epochs = [s['epoch'] for s in self.samples]
-                print(f"📊 Sample epochs: {epochs}")
+            
+    def handmade_scheduler_step(self):
+        """Our handmade scheduler step that updates the LR in optimizer"""
+        current_epoch = self.epoch + 1  # epoch is 0-indexed
+        
+        # if current_epoch <= self.warmup_epochs:
+        #     new_lr = self.warmup_lr
+        # else:
+        if self.lr_scheduler_type == "cosine":
+            # Cosine annealing with minimum LR
+            eta_min = self.base_lr * 0.01  # 1% of base LR as minimum
+            progress = (current_epoch - self.warmup_epochs) / (self.max_epochs)
+            cos_val = math.cos(math.pi * progress)
+            new_lr = eta_min + (self.base_lr - eta_min) * 0.5 * (1 + cos_val)
+            new_lr = max(new_lr, eta_min)  # Ensure minimum
         else:
-            # Try to load from individual sample files
-            print("🔄 csghmc_samples.pth not found, searching for individual sample files...")
-            self.samples = self.load_samples_from_files(directory)
-            self.sample_count = len(self.samples)
-    
-    def evaluate_ensemble_from_directory(self, checkpoint_dir):
-        """Evaluate Bayesian ensemble from a checkpoint directory
+            new_lr = self.base_lr
         
-        This method loads samples and evaluates both ensemble and single model performance
+        # Update the learning rate in optimizer's param_groups
+        for param_group in self.optim.param_groups:
+            param_group['lr'] = new_lr
+            
+        print(f"Epoch {current_epoch}: Learning rate updated to {new_lr:.6f}")
+
+    # Remove custom zero_grad and sgd_step methods
+    # def zero_grad(self):
+    # def sgd_step(self):
+
+    def forward_backward(self, batch):
+        image, label = self.parse_batch_train(batch)
+
+        model = self.model
+        optim = self.optim
+        scaler = self.scaler
+
+        prec = self.cfg.TRAINER.IVLP.PREC
+        if prec == "amp":
+            with autocast():
+                loss = model(image, label)
+            optim.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optim)  # This will call our handmade_sgd_step
+            scaler.update()
+        else:
+            loss = model(image, label)
+            optim.zero_grad()
+            loss.backward()
+            optim.step()  # This will call our handmade_sgd_step
+
+        loss_summary = {"loss": loss.item()}
+
+        if (self.batch_idx + 1) == self.num_batches:
+            self.update_lr()
+
+        # Save checkpoint every cfg.OPTIM.CYCLE_LENGTH epochs
+        if self.lr_scheduler_type == "cosine_restart":
+            cycle_length = self.cfg.OPTIM.CYCLE_LENGTH
+
+            if cycle_length > 0 and (self.epoch) % cycle_length == 0 and (self.batch_idx + 1) == self.num_batches and self.epoch > 0 or (self.epoch + 1) == self.max_epochs and (self.batch_idx + 1) == self.num_batches:
+                print(f"Saving checkpoint at epoch {self.epoch} due to cosine restart")
+                model_name = f"cycle_ep{self.epoch}.pth.tar"
+                self.save_model(self.epoch, "./output/",is_best=False, model_name=model_name)
+
+        return loss_summary
+
+    # def update_lr(self):
+    #     """Update learning rate at the end of each epoch"""
+    #     current_epoch = self.epoch + 1  # epoch is 0-indexed
+    #     self.current_lr = self.get_current_lr()
+    #     print(f"Epoch {current_epoch}: Learning rate updated to {self.current_lr:.6f}")
+
+    def parse_batch_train(self, batch):
+        input = batch["img"]
+        label = batch["label"]
+        input = input.to(self.device)
+        label = label.to(self.device)
+        return input, label
+    
+    @torch.no_grad()
+    def test(self, split=None):
         """
-        print(f"\n{'='*80}")
-        print(f"EVALUATING IVLP BAYESIAN ENSEMBLE FROM: {checkpoint_dir}")
-        print(f"{'='*80}")
+        Perform ensemble evaluation by averaging predictions from all saved cycle checkpoints.
+        """
+        # Find all saved model checkpoints from the cycles
+        model_dir = "/home/ubuntu/omar/promptsrc/PromptSRC/output/VLPromptLearner/"
+        checkpoint_paths = glob.glob(osp.join(model_dir, "cycle_ep*.pth.tar"))
         
-        # Load samples directly (skip standard model checkpoint loading for cSGHMC)
-        self.load_samples_from_files(checkpoint_dir)
+        if not checkpoint_paths:
+            print("No cycle checkpoints found. Falling back to standard evaluation.")
+            return super().test(split)
+
+        print(f"Found {len(checkpoint_paths)} cycle checkpoints for ensemble evaluation.")
+
+        self.set_model_mode("eval")
+        self.evaluator.reset()
+
+        if split is None:
+            split = self.cfg.TEST.SPLIT
         
-        if len(self.samples) == 0:
-            print("❌ No samples found! Cannot perform ensemble evaluation.")
-            print("   Make sure the checkpoint directory contains csghmc_sample_epoch_*.pth files")
-            return None
+        data_loader = self.test_loader
+        if split == "val" and self.val_loader is not None:
+            data_loader = self.val_loader
+        
+        print(f"Evaluating on the *{split}* set using an ensemble of {len(checkpoint_paths)} models...")
+
+        for batch in tqdm(data_loader, desc="Ensemble Evaluation"):
+            input, label = self.parse_batch_test(batch)
             
-        # Run ensemble evaluation
-        print("\n🎯 Running IVLP Ensemble Evaluation...")
-        ensemble_result = self.test(split="test")
-        
-        # Run single model evaluation for comparison
-        print("\n📈 Running Single IVLP Model Evaluation...")
-        backup_samples = self.samples.copy()  # Backup samples
-        self.samples = []  # Temporarily clear samples
-        single_result = self.test(split="test")
-        self.samples = backup_samples  # Restore samples
-        
-        # Print results
-        print(f"\n{'='*60}")
-        print("📋 IVLP FINAL RESULTS:")
-        print(f"   Ensemble Accuracy: {ensemble_result:.4f}%")
-        print(f"   Single Model Accuracy: {single_result:.4f}%")
-        print(f"   Improvement: {ensemble_result - single_result:.4f}%")
-        print(f"   Number of Samples: {len(backup_samples)}")
-        
-        return {
-            "ensemble_accuracy": ensemble_result,
-            "single_accuracy": single_result, 
-            "improvement": ensemble_result - single_result,
-            "n_samples": len(backup_samples),
-            "sample_epochs": [s['epoch'] for s in backup_samples]
-        }
-    
+            # Accumulate logits from all models in the ensemble
+            ensembled_logits = 0
+            
+            for checkpoint_path in checkpoint_paths:
+                # Load state dict from a checkpoint
+                checkpoint = load_checkpoint(checkpoint_path)
+                state_dict = checkpoint["state_dict"]
+                
+                # Handle DataParallel prefix if necessary
+                if list(state_dict.keys())[0].startswith('module.'):
+                    state_dict = {k[7:]: v for k, v in state_dict.items()}
+
+                #ignore fixed token vectors
+                if "prompt_learner.token_prefix" in state_dict:
+                    del state_dict["prompt_learner.token_prefix"]
+                if "prompt_learner.token_suffix" in state_dict:
+                    del state_dict["prompt_learner.token_suffix"]
+
+                # Load the weights into the model
+                self.model.load_state_dict(state_dict, strict=False)
+
+                # Get logits for the current model
+                with torch.no_grad():
+                    logits = self.model_inference(input)
+                
+                ensembled_logits += logits
+            
+            # Average the logits
+            averaged_logits = ensembled_logits / len(checkpoint_paths)
+            
+            # Process the averaged predictions
+            self.evaluator.process(averaged_logits, label)
+
+        results = self.evaluator.evaluate()
+
+        print(f"Ensemble evaluation results on the *{split}* set:")
+        for k, v in results.items():
+            print(f"- {k}: {v:.2f}")
+
+        return list(results.values())[0]
+
     def save_model(self, epoch, directory, is_best=False, val_result=None, model_name=""):
-        """Override save_model to also save cSGHMC samples"""
-        super().save_model(epoch, directory, is_best, val_result, model_name)
+        """
+        Override save_model to handle unpicklable handmade methods.
+        """
+        # Temporarily restore original methods to allow parent save_model to work
+        original_optim_step = self.optim.step
+        original_sched_step = self.sched.step
+        self.optim.step = self.original_optim_step  # Restore original picklable method
+        self.sched.step = self.original_sched_step  # Restore original picklable method
+
+        try:
+            # Call the parent's save_model method.
+            # This saves the standard model checkpoint (e.g., model-best.pth.tar).
+            super().save_model(epoch, directory, is_best=is_best, val_result=val_result, model_name=model_name)
         
-        # Save samples for Bayesian averaging
-        if len(self.samples) > 0:
-            samples_path = osp.join(directory, "csghmc_samples.pth")
-            samples_data = {
-                "samples": self.samples,
-                "sample_count": self.sample_count,
-                "cycle_length": self.cycle_length,
-                "total_cycles": self.total_cycles,
-                "collection_rule": f"epoch % {self.cycle_length} == {self.cycle_length - 1} (last epoch of each {self.cycle_length}-epoch cycle)"
-            }
-            torch.save(samples_data, samples_path)
-            print(f"💾 Saved {len(self.samples)} IVLP cSGHMC samples to {samples_path}")
-            
-            # Also save individual sample files for inspection
-            for i, sample_info in enumerate(self.samples):
-                sample_path = osp.join(directory, f"csghmc_sample_epoch_{sample_info['epoch']}.pth")
-                torch.save(sample_info["parameters"], sample_path)
-            print(f"Saved individual IVLP sample files for epochs: {[s['epoch'] for s in self.samples]}")
+        finally:
+            # Always restore the handmade methods so training can continue.
+            self.optim.step = original_optim_step
+            self.sched.step = original_sched_step
