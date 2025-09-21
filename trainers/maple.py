@@ -10,7 +10,8 @@ from torch.cuda.amp import GradScaler, autocast
 from dassl.engine import TRAINER_REGISTRY, TrainerX
 from dassl.metrics import compute_accuracy
 from dassl.utils import load_pretrained_weights, load_checkpoint
-from dassl.optim import build_optimizer, build_lr_scheduler
+from dassl.optim import build_lr_scheduler
+from .optimizers import build_optimizer
 
 from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer

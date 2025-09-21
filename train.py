@@ -29,7 +29,7 @@ import trainers.zsclip
 import trainers.maple
 import trainers.independentVL
 import trainers.promptsrc
-
+import trainers.csghmc  # custom
 
 def print_args(args, cfg):
     print("***************")
@@ -135,6 +135,16 @@ def extend_cfg(cfg):
     cfg.TRAINER.IVLP.PROMPT_DEPTH_TEXT = 9  # Max 12, minimum 0, for 0 it will act as shallow IVLP prompting(J=1)
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
+    cfg.CSGHMC = CN()
+    cfg.CSGHMC.CYCLE_LENGTH = 0  # cycle length for SGH
+    cfg.CSGHMC.NOISE_LAST_EPOCHS = 0  # add noise
+    cfg.CSGHMC.NOISE_TEMPERATURE = 1.0  # noise temperature
+
+    cfg.CSGHMC.REPULSION = CN()
+    cfg.CSGHMC.REPULSION.REPULSION_STRENGTH = 0.01  # repulsion strength
+    cfg.CSGHMC.REPULSION.REF_SAMPLES = 256
+    cfg.CSGHMC.REPULSION.REG_STRENGTH = 1e-6
+
 
 def setup_cfg(args):
     cfg = get_cfg_default()
@@ -171,7 +181,7 @@ def main(args):
 
     print_args(args, cfg)
     print("Collecting env info ...")
-    print("** System info **\n{}\n".format(collect_env_info()))
+    # print("** System info **\n{}\n".format(collect_env_info()))
 
     trainer = build_trainer(cfg)
 

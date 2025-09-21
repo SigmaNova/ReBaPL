@@ -128,24 +128,18 @@ class RepresentationTracker:
         self.extracted_features = {}
         
         net.eval()
-        try:
-            dummy_labels = torch.zeros(self.reference_samples.shape[0], dtype=torch.long, device=self.reference_samples.device)
-            _ = net(self.reference_samples, dummy_labels) # This triggers the hook
-            
-            # **FIX: Select the specific feature we want instead of concatenating**
-            if 'text_encoder' in self.extracted_features:
-                representation = self.extracted_features['text_encoder']
-            else:
-                print("Warning: 'text_encoder' features not found. Falling back.")
-                # Fallback to direct image encoding if text_encoder hook failed
-                with torch.no_grad():
-                    representation = net.image_encoder(self.reference_samples)
-
-        except Exception as e:
-            print(f"Error in representation extraction: {e}")
-            # Fallback representation
-            representation = torch.randn(self.reference_samples.shape[0], 512, device=self.device)
+        dummy_labels = torch.zeros(self.reference_samples.shape[0], dtype=torch.long, device=self.reference_samples.device)
+        _ = net(self.reference_samples, dummy_labels) # This triggers the hook
         
+        # **FIX: Select the specific feature we want instead of concatenating**
+        if 'text_encoder' in self.extracted_features:
+            representation = self.extracted_features['text_encoder']
+        else:
+            print("Warning: 'text_encoder' features not found. Falling back.")
+            # Fallback to direct image encoding if text_encoder hook failed
+            with torch.no_grad():
+                representation = net.image_encoder(self.reference_samples)
+
         net.train()
         return representation
     
@@ -172,58 +166,54 @@ class RepresentationTracker:
         most_recent_cycle = max(past_cycles)
         past_repr = self.cycle_representations[most_recent_cycle]
         
-        try:
-            # Get current representation with gradients enabled
-            self.register_hooks(net)
-            self.extracted_features = {}
-            
-            current_repr = self.extract_representation(net)
-            # # Forward pass with gradients
-            # if hasattr(net, 'image_encoder'):
-            #     current_repr = net.image_encoder(self.reference_samples)
-            # else:
-            #     current_repr = net(self.reference_samples)
-            
-            # if self.extracted_features:
-            #     all_features = [self.extracted_features[name] 
-            #                   for name in sorted(self.extracted_features.keys())]
-            #     if all_features:
-            #         current_repr = torch.cat(all_features, dim=1)
-            
-            # Compute Procrustes-based repulsive force
-            force_matrix = self._compute_procrustes_force(current_repr, past_repr, repulsion_strength)
-            mean_force = force_matrix.mean(dim=0)
-            
-            # Clamp force magnitude to prevent instability
-            force_norm = torch.norm(mean_force)
-            if force_norm > 10.0:
-                mean_force = mean_force * (10.0 / force_norm)
-            
-            # Compute gradients w.r.t. network parameters
-            current_mean = current_repr.mean(dim=0)
-            
-            # Fix 4: Filter parameters that require gradients
-            grad_params = [p for p in net.parameters() if p.requires_grad]
-            
-            param_grads = torch.autograd.grad(
-                outputs=current_mean,
-                inputs=grad_params,
-                grad_outputs=mean_force,
-                allow_unused=True,
-                retain_graph=False
-            )
-            
-            # Create gradient dictionary
-            grad_dict = {}
-            for param, grad in zip(grad_params, param_grads):
-                if grad is not None and not (torch.isnan(grad).any() or torch.isinf(grad).any()):
-                    grad_dict[param] = grad
-            
-            return grad_dict
-            
-        except Exception as e:
-            print(f"Warning: Procrustes gradient computation failed: {e}")
-            return {}
+        # Get current representation with gradients enabled
+        self.register_hooks(net)
+        self.extracted_features = {}
+        
+        current_repr = self.extract_representation(net)
+        # # Forward pass with gradients
+        # if hasattr(net, 'image_encoder'):
+        #     current_repr = net.image_encoder(self.reference_samples)
+        # else:
+        #     current_repr = net(self.reference_samples)
+        
+        # if self.extracted_features:
+        #     all_features = [self.extracted_features[name] 
+        #                   for name in sorted(self.extracted_features.keys())]
+        #     if all_features:
+        #         current_repr = torch.cat(all_features, dim=1)
+        
+        # Compute Procrustes-based repulsive force
+        force_matrix = self._compute_procrustes_force(current_repr, past_repr, repulsion_strength)
+        mean_force = force_matrix.mean(dim=0)
+        
+        # Clamp force magnitude to prevent instability
+        force_norm = torch.norm(mean_force)
+        if force_norm > 10.0:
+            mean_force = mean_force * (10.0 / force_norm)
+        
+        # Compute gradients w.r.t. network parameters
+        current_mean = current_repr.mean(dim=0)
+        
+        # Fix 4: Filter parameters that require gradients
+        grad_params = [p for p in net.parameters() if p.requires_grad]
+        
+        param_grads = torch.autograd.grad(
+            outputs=current_mean,
+            inputs=grad_params,
+            grad_outputs=mean_force,
+            allow_unused=True,
+            retain_graph=False
+        )
+        
+        # Create gradient dictionary
+        grad_dict = {}
+        for param, grad in zip(grad_params, param_grads):
+            if grad is not None and not (torch.isnan(grad).any() or torch.isinf(grad).any()):
+                grad_dict[param] = grad
+        
+        return grad_dict
+    
     
     def _compute_procrustes_force(self, current_repr, past_repr, repulsion_strength):
         """Compute repulsive force based on Procrustes distance."""
@@ -706,24 +696,20 @@ class CoCoOp_rcSGHMC(TrainerX):
 
     def _add_repulsion_gradients(self):
         """Add Procrustes-based repulsion gradients to current gradients."""
-        try:
-            # Get repulsion gradients from representation tracker
-            repulsion_grads = self.representation_tracker.compute_procrustes_repulsion_gradients(
-                net=self.model,
-                current_cycle=self.current_cycle,
-                repulsion_strength=self.repulsion_strength
-            )
-            
-            if repulsion_grads:
-                # Add repulsion gradients to existing gradients
-                for param in self.model.parameters():
-                    if param in repulsion_grads and param.grad is not None:
-                        param.grad.data.add_(repulsion_grads[param])
-                        
-        except Exception as e:
-            print(f"Warning: Failed to add repulsion gradients: {e}")
-
-
+        # Get repulsion gradients from representation tracker
+        repulsion_grads = self.representation_tracker.compute_procrustes_repulsion_gradients(
+            net=self.model,
+            current_cycle=self.current_cycle,
+            repulsion_strength=self.repulsion_strength
+        )
+        
+        if repulsion_grads:
+            # Add repulsion gradients to existing gradients
+            for param in self.model.parameters():
+                if param in repulsion_grads and param.grad is not None:
+                    param.grad.data.add_(repulsion_grads[param])
+                    
+    
 
     def parse_batch_train(self, batch):
         input = batch["img"]
