@@ -3,15 +3,15 @@
 #cd ../..
 
 # custom config
-DATA="/path/to/dataset/folder"
+DATA="~/datasets"
 TRAINER=CoCoOp
 
 DATASET=$1
 SEED=$2
 
-CFG=vit_b16_c4_ep10_batch1_ctxv1
+CFG=rn50
 SHOTS=16
-LOADEP=10
+LOADEP=20
 SUB=new
 
 

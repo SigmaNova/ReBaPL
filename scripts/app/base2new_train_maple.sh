@@ -4,12 +4,12 @@
 
 # custom config
 DATA=~/datasets/
-TRAINER=MaPLe
+TRAINER=APP
 
 DATASET=$1
 SEED=$2
 
-CFG=vit_b16_c2_ep5_batch4_2ctx
+CFG=rn50
 SHOTS=16
 
 

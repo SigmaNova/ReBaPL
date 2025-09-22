@@ -3,19 +3,25 @@
 #cd ../..
 
 # custom config
-DATA=~/datasets/
-TRAINER=MaPLe
+DATA="~/datasets"
+TRAINER=APP
 
 DATASET=$1
 SEED=$2
 
-CFG=vit_b16_c2_ep5_batch4_2ctx
+CFG=rn50
 SHOTS=16
+LOADEP=50
+SUB=new
 
 
-DIR=output/base2new/train_base/${DATASET}/shots_${SHOTS}/${TRAINER}/${CFG}/seed${SEED}
+COMMON_DIR=${DATASET}/shots_${SHOTS}/${TRAINER}/${CFG}/seed${SEED}
+MODEL_DIR=output/base2new/train_base/${COMMON_DIR}
+DIR=output/base2new/test_${SUB}/${COMMON_DIR}
 if [ -d "$DIR" ]; then
+    echo "Evaluating model"
     echo "Results are available in ${DIR}. Resuming..."
+
     python train.py \
     --root ${DATA} \
     --seed ${SEED} \
@@ -23,10 +29,16 @@ if [ -d "$DIR" ]; then
     --dataset-config-file configs/datasets/${DATASET}.yaml \
     --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
     --output-dir ${DIR} \
+    --model-dir ${MODEL_DIR} \
+    --load-epoch ${LOADEP} \
+    --eval-only \
     DATASET.NUM_SHOTS ${SHOTS} \
-    DATASET.SUBSAMPLE_CLASSES base
+    DATASET.SUBSAMPLE_CLASSES ${SUB}
+
 else
-    echo "Run this job and save the output to ${DIR}"
+    echo "Evaluating model"
+    echo "Runing the first phase job and save the output to ${DIR}"
+
     python train.py \
     --root ${DATA} \
     --seed ${SEED} \
@@ -34,6 +46,9 @@ else
     --dataset-config-file configs/datasets/${DATASET}.yaml \
     --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
     --output-dir ${DIR} \
+    --model-dir ${MODEL_DIR} \
+    --load-epoch ${LOADEP} \
+    --eval-only \
     DATASET.NUM_SHOTS ${SHOTS} \
-    DATASET.SUBSAMPLE_CLASSES base
+    DATASET.SUBSAMPLE_CLASSES ${SUB}
 fi
