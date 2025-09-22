@@ -174,7 +174,7 @@ class CustomCLIP(nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
 
-    def forward(self, image, label=None):
+    def forward(self, image, label=None, return_text_features=False):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
@@ -184,16 +184,19 @@ class CustomCLIP(nn.Module):
         prompts = self.prompt_learner(image_features)
 
         logits = []
+        all_text_features = []
         for pts_i, imf_i in zip(prompts, image_features):
             text_features = self.text_encoder(pts_i, tokenized_prompts)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            all_text_features.append(text_features)
             l_i = logit_scale * imf_i @ text_features.t()
             logits.append(l_i)
         logits = torch.stack(logits)
 
         if self.prompt_learner.training:
             return F.cross_entropy(logits, label)
-
+        if return_text_features:
+            return logits, torch.cat(all_text_features, dim=0)
         return logits
 
 

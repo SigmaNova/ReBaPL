@@ -11,6 +11,7 @@ import copy
 # wrapper of any trainer, to add our optimization algorithm on top of it
 # set the name of the original trainer
 from .maple import MaPLe  # 
+from .independentVL import IVLP
 from pathlib import Path
 import glob 
 from torch.amp import autocast
@@ -19,7 +20,7 @@ from .representation_tracker import RepresentationTracker
 
 
 @TRAINER_REGISTRY.register()
-class CSGHMC(MaPLe):
+class CSGHMC(IVLP):
     def build_model(self):
         super().build_model()
         self.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
@@ -66,11 +67,9 @@ class CSGHMC(MaPLe):
 
         if self.epoch % self.cycle_length == 0 and self.epoch > 0:
             self.current_cycle = self.epoch // self.cycle_length
-            for cycle, model_state in self.cycles_state_dict.items():
-                model = copy.deepcopy(self.model)
-                model.load_state_dict(model_state)
-                 # Update representation for this cycle
-                self.representation_tracker.update_cycle_representation(model, cycle)
+            model = copy.deepcopy(self.model)
+                # Update representation for this cycle
+            self.representation_tracker.update_cycle_representation(model, self.current_cycle)
 
         super().run_epoch()
         
@@ -154,20 +153,16 @@ class CSGHMC(MaPLe):
 
     def _add_repulsion_gradients(self):
         """Add Procrustes-based repulsion gradients to current gradients."""
-        try:
-            # Get repulsion gradients from representation tracker
-            repulsion_grads = self.representation_tracker.compute_procrustes_repulsion_gradients(
-                net=self.model,
-                current_cycle=self.current_cycle,
-                repulsion_strength=self.repulsion_strength
-            )
-            
-            if repulsion_grads:
-                # Add repulsion gradients to existing gradients
-                for param in self.model.parameters():
-                    if param in repulsion_grads and param.grad is not None:
-                        param.grad.data.add_(repulsion_grads[param])
-                        
-        except Exception as e:
-            print(f"Warning: Failed to add repulsion gradients: {e}")
-
+        # Get repulsion gradients from representation tracker
+        repulsion_grads = self.representation_tracker.compute_procrustes_repulsion_gradients(
+            net=self.model,
+            current_cycle=self.current_cycle,
+            repulsion_strength=self.repulsion_strength
+        )
+        
+        if repulsion_grads:
+            # Add repulsion gradients to existing gradients
+            for param in self.model.parameters():
+                if param in repulsion_grads and param.grad is not None:
+                    param.grad.data.add_(repulsion_grads[param])
+                    
