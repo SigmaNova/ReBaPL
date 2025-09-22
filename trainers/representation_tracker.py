@@ -138,19 +138,11 @@ class RepresentationTracker:
                 Vt[-1, :] *= -1
                 R = (Vt.T @ U_float.to(H.dtype).T)
                         
-        # Force computation with gradients
         current_centered_grad = current_repr - current_repr.mean(dim=0, keepdim=True)
         past_centered_grad = past_repr - past_repr.mean(dim=0, keepdim=True)
         
-        current_norm_grad = torch.norm(current_centered_grad, 'fro')
-        past_norm_grad = torch.norm(past_centered_grad, 'fro')
-        
-        if current_norm_grad > 1e-8 and past_norm_grad > 1e-8:
-            current_normalized_grad = current_centered_grad / current_norm_grad
-            past_normalized_grad = past_centered_grad / past_norm_grad
-        else:
-            current_normalized_grad = current_centered_grad
-            past_normalized_grad = past_centered_grad
+        current_normalized_grad = current_centered_grad
+        past_normalized_grad = past_centered_grad
         
         # Apply rotation and compute force
         R_detached = R.detach()
@@ -158,22 +150,11 @@ class RepresentationTracker:
         diff_matrix = current_aligned - past_normalized_grad.detach()
         
         dist_sq = torch.sum(diff_matrix.pow(2))
-        force_magnitude = torch.clamp(repulsion_strength / (dist_sq + 1e-8), max=10.0)
+        force_magnitude = repulsion_strength / (dist_sq + 1e-8)
         
-        # Transform force back
         aligned_force = force_magnitude * diff_matrix
         force_matrix = aligned_force @ R_detached.T
         
-        if current_norm_grad > 1e-8:
-            force_matrix = force_matrix / current_norm_grad
-        
         return force_matrix
-            
-            # print(f"Procrustes computation failed: {e}. Using Euclidean fallback.")
-            # # Fallback to simple Euclidean distance
-            # diff_matrix = current_repr - past_repr
-            # dist_sq = torch.sum(diff_matrix.pow(2))
-            # force_magnitude = torch.clamp(repulsion_strength / (dist_sq + 1e-8), max=1.0)
-            # return force_magnitude * diff_matrix
     
   
