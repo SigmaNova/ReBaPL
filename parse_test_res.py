@@ -63,13 +63,15 @@ def compute_ci95(res):
 
 def parse_function(*metrics, directory="", args=None, end_signal=None):
     print(f"Parsing files in {directory}")
+    msg_dir = osp.join(directory, "parse.txt")
     subdirs = listdir_nohidden(directory, sort=True)
 
     outputs = []
 
     for subdir in subdirs:
         fpath = osp.join(directory, subdir, "log.txt")
-        assert check_isfile(fpath)
+        if not check_isfile(fpath):
+            continue
         good_to_go = False
         output = OrderedDict()
 
@@ -97,29 +99,35 @@ def parse_function(*metrics, directory="", args=None, end_signal=None):
     assert len(outputs) > 0, f"Nothing found in {directory}"
 
     metrics_results = defaultdict(list)
-
+    msg = ""
     for output in outputs:
-        msg = ""
+        msg_one = ""
         for key, value in output.items():
             if isinstance(value, float):
-                msg += f"{key}: {value:.2f}%. "
+                msg_one += f"{key}: {value:.2f}%. "
             else:
-                msg += f"{key}: {value}. "
+                msg_one += f"{key}: {value}. "
             if key != "file":
                 metrics_results[key].append(value)
-        print(msg)
+        print(msg_one)
+        msg += f"{msg_one}\n"
 
     output_results = OrderedDict()
 
     print("===")
     print(f"Summary of directory: {directory}")
+    msg += "==="
+    msg += f"\nSummary of directory: {directory}"
     for key, values in metrics_results.items():
         avg = np.mean(values)
         std = compute_ci95(values) if args.ci95 else np.std(values)
         print(f"* {key}: {avg:.2f}% +- {std:.2f}%")
+        msg += f"\n* {key}: {avg:.2f}% +- {std:.2f}%"
         output_results[key] = avg
     print("===")
-
+    msg += "\n==="
+    with open(msg_dir, 'w') as write:
+        write.write(msg)
     return output_results
 
 
@@ -167,8 +175,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    end_signal = "Finished training"
-    if args.test_log:
-        end_signal = "=> result"
+    end_signal = "=> result"
 
     main(args, end_signal)
