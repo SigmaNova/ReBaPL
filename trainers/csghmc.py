@@ -15,12 +15,13 @@ from .independentVL import IVLP
 from pathlib import Path
 import glob 
 from torch.cuda.amp import autocast
+from .cocoop import CoCoOp
 
 from .representation_tracker import RepresentationTracker
 
 
 @TRAINER_REGISTRY.register()
-class CSGHMC(IVLP):
+class CSGHMC(CoCoOp):
     def build_model(self):
         super().build_model()
         self.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH

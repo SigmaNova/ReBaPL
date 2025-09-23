@@ -13,6 +13,8 @@ import copy
 # set the name of the original trainer
 from .maple import MaPLe  # 
 from .independentVL import IVLP
+from .cocoop import CoCoOp
+
 from pathlib import Path
 import glob 
 from torch.amp import autocast
@@ -21,7 +23,7 @@ from .representation_tracker import RepresentationTracker
 
 
 @TRAINER_REGISTRY.register()
-class CSGHMC_CR(IVLP):
+class CSGHMC_CR(CoCoOp):
     def build_model(self):
         super().build_model()
         self.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH

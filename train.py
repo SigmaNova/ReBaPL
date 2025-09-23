@@ -32,6 +32,7 @@ import trainers.promptsrc
 import trainers.csghmc  # custom
 import trainers.app
 import trainers.vpt
+from trainers.csghmc_cold_restarts import CSGHMC_CR  # custom
 
 def print_args(args, cfg):
     print("***************")
