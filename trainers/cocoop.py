@@ -186,6 +186,7 @@ class CustomCLIP(nn.Module):
 
         logits = []
         all_text_features = []
+
         for pts_i, imf_i in zip(prompts, image_features):
             text_features = self.text_encoder(pts_i, tokenized_prompts)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
@@ -198,7 +199,7 @@ class CustomCLIP(nn.Module):
             return logits, torch.cat(all_text_features, dim=0)
         if self.prompt_learner.training:
             return F.cross_entropy(logits, label)
-        return logits
+        return logits 
 
 
 @TRAINER_REGISTRY.register()
