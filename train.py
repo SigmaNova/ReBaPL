@@ -31,6 +31,7 @@ import trainers.independentVL
 import trainers.promptsrc
 import trainers.csghmc  # custom
 import trainers.app
+import trainers.vpt
 
 def print_args(args, cfg):
     print("***************")
@@ -156,6 +157,14 @@ def extend_cfg(cfg):
     cfg.TRAINER.APP.N = 4 # the number of prompts
     cfg.TRAINER.APP.ALPHA = 0.7 # the weight to balance the two branches
     cfg.TRAINER.APP.REG = 1.0 # regularization strength
+
+    cfg.TRAINER.VPT = CN()
+    cfg.TRAINER.VPT.N_CTX = 16  # number of context vectors
+    cfg.TRAINER.VPT.L = 10  # number of monte carlo samples
+    cfg.TRAINER.VPT.CTX_INIT = ""  # initialization words
+    cfg.TRAINER.VPT.PREC = "fp16"  # fp16, fp32, amp
+    cfg.TRAINER.VPT.VPT_TYPE = "cocoopvpt"
+
 
 def setup_cfg(args):
     cfg = get_cfg_default()
