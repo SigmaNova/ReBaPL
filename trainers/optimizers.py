@@ -17,6 +17,7 @@ class SGHMC(torch.optim.SGD):
         self.cycle_length = cycle_length
         self.noise_last_epochs = noise_last_epochs
         self.noise_temperature = 1.0  # can be tuned, usually set to 1.0
+        self.dataset_size = 1  # to be set externally, used in noise calculation
 
     def set_epoch(self, epoch):
         self.epoch = epoch
@@ -51,11 +52,49 @@ class SGHMC(torch.optim.SGD):
                     cycle_epoch = (self.epoch + 1) % self.cycle_length
                     if cycle_epoch >= self.cycle_length - self.noise_last_epochs:
                         noise_std = math.sqrt(2 * weight_decay * current_lr)
+                        # buf_new += (2.0*lr*args.alpha*args.temperature/datasize)**.5*eps
+                        # noise_std = (2.0 * current_lr * momentum * self.noise_temperature / self.dataset_size)**0.5
                         noise = torch.randn_like(param) * noise_std * self.noise_temperature
                         buf.add_(noise)
 
                 # Update parameters
                 param.data.add_(buf, alpha=-current_lr)
+    # def step(self, closure=None):
+    #     """Our handmade SGD step using current LR from the real optimizer"""
+    #     current_lr = self.param_groups[0]['lr']
+    #     weight_decay = self.param_groups[0]['weight_decay']
+    #     momentum = self.param_groups[0]['momentum']
+    #     for group in self.param_groups:
+    #         for i, param in enumerate(group['params']):
+    #             if param.grad is None:
+    #                 continue
+
+    #             # Initialize momentum buffer if it doesn't exist (matching first implementation)
+    #             if 'momentum_buffer' not in self.state[param]:
+    #                 self.state[param]['momentum_buffer'] = torch.zeros_like(param.data)
+
+    #             buf = self.state[param]['momentum_buffer']
+                
+    #             # Get gradient and apply weight decay (matching first implementation)
+    #             d_p = param.grad.data
+    #             d_p.add_(param.data, alpha=weight_decay)
+
+    #             # Update momentum buffer using first implementation's formula
+    #             buf_new = (1 - momentum) * buf - current_lr * d_p
+
+    #             # Add noise if in the last N epochs of cycle
+    #             if self.cycle_length > 0 and self.noise_last_epochs > 0:
+    #                 cycle_epoch = (self.epoch + 1) % self.cycle_length
+    #                 if cycle_epoch >= self.cycle_length - self.noise_last_epochs:
+    #                     noise_std = (2.0 * current_lr * momentum * self.noise_temperature / self.dataset_size)**0.5
+    #                     eps = torch.randn_like(param) * noise_std
+    #                     buf_new.add_(eps)
+
+    #             # Update parameters (matching first implementation)
+    #             param.data.add_(buf_new)
+                
+    #             # Update buffer state
+    #             self.state[param]['momentum_buffer'] = buf_new
 
 def build_optimizer(model, optim_cfg, param_groups=None):
     """A function wrapper for building an optimizer.

@@ -30,12 +30,14 @@ class CSGHMC_CR(CoCoOp):
         self.optim.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
         self.optim.noise_last_epochs = self.cfg.CSGHMC.NOISE_LAST_EPOCHS
         self.optim.noise_temperature = self.cfg.CSGHMC.NOISE_TEMPERATURE
+        self.optim.dataset_size = len(self.train_loader_x.dataset)  # for noise calculation
 
-        lr_scheduler = "cosine_restart" if self.cfg.CSGHMC.CYCLE_LENGTH > 0 else "cosine"
+        lr_scheduler = "cosine" # "cosine_restart" if self.cfg.CSGHMC.CYCLE_LENGTH > 0 else "cosine"
         self.lr_scheduler_type = lr_scheduler
-        self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine_restart", cycle_length=self.cfg.CSGHMC.CYCLE_LENGTH)
+        self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, lr_scheduler, cycle_length=None, max_epoch=self.cycle_length)
         self.models = []
         self.cycles_state_dict = {}
+        self.initial_state_dict = copy.deepcopy(self.model.state_dict())
 
 
         #### Repulsion between cycles ####
@@ -43,7 +45,8 @@ class CSGHMC_CR(CoCoOp):
         self.representation_tracker = RepresentationTracker(
             device=self.device,
             num_ref_samples=self.cfg.CSGHMC.REPULSION.REF_SAMPLES,
-            regularization_strength=self.cfg.CSGHMC.REPULSION.REG_STRENGTH
+            regularization_strength=self.cfg.CSGHMC.REPULSION.REG_STRENGTH,
+            batch_size=self.cfg.CSGHMC.REPULSION.BATCH_SIZE
         )
         # Inter-cycle repulsion parameters
         self.repulsion_strength = self.cfg.CSGHMC.REPULSION.REPULSION_STRENGTH
@@ -75,30 +78,34 @@ class CSGHMC_CR(CoCoOp):
                 # Update representation for this cycle
                 self.representation_tracker.update_cycle_representation(model, self.current_cycle)
                 #reintialize model weights to first cycle weights
-                first_cycle_ckpt = load_checkpoint(osp.join(self.cfg.OUTPUT_DIR, "first_cycle", "VLPromptLearner", "first_cycle.tar"))
-                state_dict = first_cycle_ckpt["state_dict"]
+                # first_cycle_ckpt = load_checkpoint(Path(self.cfg.OUTPUT_DIR) / "first_cycle" / "prompt_learner" / "first_cycle.tar")
+                # state_dict = first_cycle_ckpt["state_dict"]
 
-                if "prompt_learner.token_prefix" in state_dict:
-                    del state_dict["prompt_learner.token_prefix"]
+                # if "prompt_learner.token_prefix" in state_dict:
+                #     del state_dict["prompt_learner.token_prefix"]
 
-                if "prompt_learner.token_suffix" in state_dict:
-                    del state_dict["prompt_learner.token_suffix"]
+                # if "prompt_learner.token_suffix" in state_dict:
+                #     del state_dict["prompt_learner.token_suffix"]
 
-                self.model.load_state_dict(state_dict, strict=False)
-                
-            else :
-                #save the first cycle too
-                model_name = "first_cycle.tar"
-                save_dir = Path(self.cfg.OUTPUT_DIR) / "first_cycle"
-                self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
+                # re-build scheduler
+                self.model.load_state_dict(self.initial_state_dict)
+                self.model.train()
+                self.optim.state.clear()  # Clear all accumulated state
+
+                self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
+
+            # else:
+            #     #save the first cycle too
+            #     model_name = "first_cycle.tar"
+            #     save_dir = Path(self.cfg.OUTPUT_DIR) / "first_cycle"
+            #     self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
         super().run_epoch()
         
-        if self.lr_scheduler_type == "cosine_restart":
+        if self.cycle_length > 0:
             cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
             print(f'self.epoch: {self.epoch}, cycle_length: {cycle_length}, max_epoch: {self.cfg.OPTIM.MAX_EPOCH}')
-            if cycle_length > 0 and (self.epoch) % cycle_length == 0 and self.epoch > 0 or (self.epoch + 1) == self.cfg.OPTIM.MAX_EPOCH:
+            if cycle_length > 0 and (self.epoch + 1) % cycle_length == 0 and self.epoch > 0 or (self.epoch + 1) == self.cfg.OPTIM.MAX_EPOCH:
                 print(f"Saving checkpoint at epoch {self.epoch} due to cosine restart")
-                model_name = f"cycle_ep{self.epoch}.pth.tar"
                 model_name = "model-best.pth.tar"
                 save_dir = Path(self.cfg.OUTPUT_DIR) / f"cycle_epochs_ep{self.epoch}"
                 self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
@@ -117,8 +124,13 @@ class CSGHMC_CR(CoCoOp):
         # get all folders in the directory that start with "cycle_epochs_ep"
         checkpoint_paths = glob.glob(osp.join(directory, "cycle_epochs_ep*"))
         print(f"Found {len(checkpoint_paths)} checkpoints in {directory}")
-        checkpoint_paths = sorted(checkpoint_paths)  # sort by
+        checkpoint_paths = sorted(zip([int(p.split("/")[-1].replace("cycle_epochs_ep", "")) for p in checkpoint_paths], checkpoint_paths), key=lambda x: x[0])  # sort by epoch
+        checkpoint_paths = [p[1] for p in checkpoint_paths]
+        print(f"Checkpoints: {checkpoint_paths}")
+        checkpoint_paths = checkpoint_paths[:]  # load first cycle only for now
         self.models = []
+        if not checkpoint_paths:
+            raise FileNotFoundError(f"No checkpoints found in {directory}")
         for checkpoint in checkpoint_paths: 
             print(f"Loading checkpoint from {checkpoint}")
             super().load_model(checkpoint, epoch=None) # Important to keep it None

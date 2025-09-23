@@ -5,12 +5,12 @@ use_cuda = torch.cuda.is_available()
 class RepresentationTracker:
     """Tracks representation statistics for inter-cycle repulsion using Procrustes distance."""
     
-    def __init__(self, device, num_ref_samples=128, regularization_strength=1e-6):
+    def __init__(self, device, num_ref_samples=128, regularization_strength=1e-6, batch_size=1):
         self.device = device
         self.num_ref_samples = num_ref_samples
         self.regularization_strength = regularization_strength
         self.reference_samples = None
-        
+        self.batch_size = 1
         # Track representation statistics per cycle
         self.cycle_representations = {}
         
@@ -43,7 +43,11 @@ class RepresentationTracker:
             return None
         
         # ... (code for preparing reference_samples)
-        return net(self.reference_samples, return_text_features=True)[1]
+        # only sample batch_size samples at a time to avoid OOM
+        # shuffle the reference samples
+        indices = torch.randperm(self.reference_samples.size(0))
+        shuffled_samples = self.reference_samples[indices][:self.batch_size]
+        return net(shuffled_samples, return_text_features=True)[1]
     
     def update_cycle_representation(self, net, cycle_num):
         """Update the representation for the current cycle."""
