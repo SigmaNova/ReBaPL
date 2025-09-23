@@ -1,7 +1,7 @@
 """
 Goal
 ---
-1. Read test results from log.txt files
+1. Read test results from log files (latest timestamped version)
 2. Compute mean and std across different folders (seeds)
 
 Usage
@@ -12,8 +12,10 @@ which contains results of different seeds, e.g.,
 my_experiment/
     seed1/
         log.txt
+        log.txt-2024-01-15-14-30-45-123
     seed2/
         log.txt
+        log.txt-2024-01-15-14-32-10-456
     seed3/
         log.txt
 
@@ -32,9 +34,11 @@ my_experiment/
     exp-1/
         seed1/
             log.txt
+            log.txt-2024-01-15-14-30-45-123
             ...
         seed2/
             log.txt
+            log.txt-2024-01-15-14-32-10-456
             ...
         seed3/
             log.txt
@@ -50,15 +54,64 @@ $ python tools/parse_test_res.py output/my_experiment --multi-exp
 """
 import re
 import numpy as np
+import os
 import os.path as osp
 import argparse
 from collections import OrderedDict, defaultdict
+from datetime import datetime
 
 from dassl.utils import check_isfile, listdir_nohidden
 
 
 def compute_ci95(res):
     return 1.96 * np.std(res) / np.sqrt(len(res))
+
+
+def get_latest_log_file(directory):
+    """
+    Get the latest log file from a directory.
+    Priority: log.txt-YYYY-MM-DD-HH-MM-SS-MS > log.txt
+    If multiple timestamped files exist, return the most recent one.
+    """
+    if not os.path.isdir(directory):
+        return None
+    
+    files = os.listdir(directory)
+    log_files = []
+    
+    # Pattern for timestamped log files: log.txt-YYYY-MM-DD-HH-MM-SS-MS
+    timestamp_pattern = re.compile(r'^log\.txt-(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-\d+)$')
+    
+    # Find all timestamped log files
+    timestamped_files = []
+    for file in files:
+        match = timestamp_pattern.match(file)
+        if match:
+            timestamp_str = match.group(1)
+            try:
+                # Parse timestamp (ignore milliseconds for datetime parsing)
+                timestamp_parts = timestamp_str.split('-')
+                if len(timestamp_parts) >= 6:
+                    dt_str = '-'.join(timestamp_parts[:3]) + ' ' + ':'.join(timestamp_parts[3:6])
+                    timestamp = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
+                    timestamped_files.append((file, timestamp, timestamp_str))
+            except ValueError:
+                # If timestamp parsing fails, skip this file
+                continue
+    
+    # If we have timestamped files, return the most recent one
+    if timestamped_files:
+        # Sort by timestamp (most recent first)
+        timestamped_files.sort(key=lambda x: x[1], reverse=True)
+        latest_file = timestamped_files[0][0]
+        return osp.join(directory, latest_file)
+    
+    # If no timestamped files, check for regular log.txt
+    log_txt_path = osp.join(directory, "log.txt")
+    if check_isfile(log_txt_path):
+        return log_txt_path
+    
+    return None
 
 
 def parse_function(*metrics, directory="", args=None, end_signal=None):
@@ -69,9 +122,14 @@ def parse_function(*metrics, directory="", args=None, end_signal=None):
     outputs = []
 
     for subdir in subdirs:
-        fpath = osp.join(directory, subdir, "log.txt")
-        if not check_isfile(fpath):
+        subdir_path = osp.join(directory, subdir)
+        fpath = get_latest_log_file(subdir_path)
+        
+        if not fpath:
+            print(f"Warning: No log file found in {subdir_path}")
             continue
+            
+        print(f"Using log file: {fpath}")
         good_to_go = False
         output = OrderedDict()
 
