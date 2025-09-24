@@ -72,13 +72,17 @@ class CSGHMC_CR(CoCoOp):
             self.representation_tracker.initialize_reference_samples(ref_loader)
 
             torch.set_rng_state(rng_state)
-
-        if self.epoch % self.cycle_length == 0:
+        if (self.epoch + 1) % self.cycle_length == 0:
             if self.epoch > 0:
-                self.current_cycle = self.epoch // self.cycle_length
-                for i, model in enumerate(self.last_cycle_samples):
+                self.current_cycle += 1
+                for i, weights in enumerate(self.last_cycle_samples):
                     # Update representation for this cycle
-                    self.representation_tracker.update_cycle_representation(model, f"cycle_{self.current_cycle - 1}_sample_{i}")
+                    with torch.no_grad():
+                        # load weights to copy of the model
+                        model = copy.deepcopy(self.model)
+                        model.load_state_dict(weights)
+                        model.eval()
+                        self.representation_tracker.update_cycle_representation(model, f"cycle_{self.current_cycle - 1}_sample_{i}")
 
                 ######## Parallel Chains ########
                 # self.model.load_state_dict(self.initial_state_dict)
@@ -91,7 +95,7 @@ class CSGHMC_CR(CoCoOp):
         
         if self.cycle_length > 0:
             cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
-            print(f'self.epoch: {self.epoch}, cycle_length: {cycle_length}, max_epoch: {self.cfg.OPTIM.MAX_EPOCH}')
+            print(f'self.epoch: {self.epoch}, cycle_length: {cycle_length}, current_cycle: {self.current_cycle}, max_epoch: {self.cfg.OPTIM.MAX_EPOCH}')
             if cycle_length > 0 and (self.epoch + 1) % cycle_length == 0 and self.epoch > 0 or (self.epoch + 1) == self.cfg.OPTIM.MAX_EPOCH:
                 print(f"Saving checkpoint at epoch {self.epoch} due to cosine restart")
                 model_name = "model-best.pth.tar"
@@ -195,10 +199,16 @@ class CSGHMC_CR(CoCoOp):
             current_cycle=self.current_cycle,
             repulsion_strength=self.repulsion_strength
         )
-        
+
+        average_grad_norm = 0.0
         if repulsion_grads:
             # Add repulsion gradients to existing gradients
             for param in self.model.parameters():
                 if param in repulsion_grads and param.grad is not None:
                     param.grad.data.add_(repulsion_grads[param])
-                    
+                    average_grad_norm += repulsion_grads[param].norm().item()
+            average_grad_norm /= len(repulsion_grads)
+            if (self.batch_idx + 1) % self.cfg.TRAIN.PRINT_FREQ == 0:
+                print(f"Avg grad norm after adding repulsion: {average_grad_norm:.4f}")
+        else: 
+            raise ValueError("No repulsion gradients computed, but repulsion_strength > 0 and current_cycle > 0.")
