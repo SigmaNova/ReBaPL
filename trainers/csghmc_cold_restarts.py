@@ -31,10 +31,9 @@ class CSGHMC_CR(CoCoOp):
         self.optim.noise_last_epochs = self.cfg.CSGHMC.NOISE_LAST_EPOCHS
         self.optim.noise_temperature = self.cfg.CSGHMC.NOISE_TEMPERATURE
         self.optim.dataset_size = len(self.train_loader_x.dataset)  # for noise calculation
-
-        lr_scheduler = "cosine" # "cosine_restart" if self.cfg.CSGHMC.CYCLE_LENGTH > 0 else "cosine"
+        lr_scheduler = "cosine_restart" # "cosine_restart" if self.cfg.CSGHMC.CYCLE_LENGTH > 0 else "cosine"
         self.lr_scheduler_type = lr_scheduler
-        self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, lr_scheduler, cycle_length=None, max_epoch=self.cycle_length)
+        self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, lr_scheduler, cycle_length=self.cycle_length, max_epoch=self.cycle_length)
         self.models = []
         # self.cycles_state_dict = {}
         self.initial_state_dict = copy.deepcopy(self.model.state_dict())
