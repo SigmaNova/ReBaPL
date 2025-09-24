@@ -36,7 +36,7 @@ class CSGHMC_CR(CoCoOp):
         self.lr_scheduler_type = lr_scheduler
         self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, lr_scheduler, cycle_length=None, max_epoch=self.cycle_length)
         self.models = []
-        self.cycles_state_dict = {}
+        # self.cycles_state_dict = {}
         self.initial_state_dict = copy.deepcopy(self.model.state_dict())
 
 
@@ -51,6 +51,9 @@ class CSGHMC_CR(CoCoOp):
         # Inter-cycle repulsion parameters
         self.repulsion_strength = self.cfg.CSGHMC.REPULSION.REPULSION_STRENGTH
         self.current_cycle = 0
+        self.noise_last_epochs = self.cfg.CSGHMC.NOISE_LAST_EPOCHS
+        self.samples_per_cycle = self.cfg.CSGHMC.SAMPLES_PER_CYCLE
+        self.last_cycle_samples = []
 
     def run_epoch(self):
         """Override run_epoch to initialize reference samples and load previous cycles."""
@@ -74,31 +77,17 @@ class CSGHMC_CR(CoCoOp):
         if self.epoch % self.cycle_length == 0:
             if self.epoch > 0:
                 self.current_cycle = self.epoch // self.cycle_length
-                model = copy.deepcopy(self.model)
-                # Update representation for this cycle
-                self.representation_tracker.update_cycle_representation(model, self.current_cycle)
-                #reintialize model weights to first cycle weights
-                # first_cycle_ckpt = load_checkpoint(Path(self.cfg.OUTPUT_DIR) / "first_cycle" / "prompt_learner" / "first_cycle.tar")
-                # state_dict = first_cycle_ckpt["state_dict"]
+                for i, model in enumerate(self.last_cycle_samples):
+                    # Update representation for this cycle
+                    self.representation_tracker.update_cycle_representation(model, f"cycle_{self.current_cycle - 1}_sample_{i}")
 
-                # if "prompt_learner.token_prefix" in state_dict:
-                #     del state_dict["prompt_learner.token_prefix"]
+                ######## Parallel Chains ########
+                # self.model.load_state_dict(self.initial_state_dict)
+                # self.model.train()
+                # self.optim.state.clear()  # Clear all accumulated state
 
-                # if "prompt_learner.token_suffix" in state_dict:
-                #     del state_dict["prompt_learner.token_suffix"]
-
-                # re-build scheduler
-                self.model.load_state_dict(self.initial_state_dict)
-                self.model.train()
-                self.optim.state.clear()  # Clear all accumulated state
-
-                self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
-
-            # else:
-            #     #save the first cycle too
-            #     model_name = "first_cycle.tar"
-            #     save_dir = Path(self.cfg.OUTPUT_DIR) / "first_cycle"
-            #     self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
+                # self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
+                
         super().run_epoch()
         
         if self.cycle_length > 0:
@@ -107,10 +96,12 @@ class CSGHMC_CR(CoCoOp):
             if cycle_length > 0 and (self.epoch + 1) % cycle_length == 0 and self.epoch > 0 or (self.epoch + 1) == self.cfg.OPTIM.MAX_EPOCH:
                 print(f"Saving checkpoint at epoch {self.epoch} due to cosine restart")
                 model_name = "model-best.pth.tar"
-                save_dir = Path(self.cfg.OUTPUT_DIR) / f"cycle_epochs_ep{self.epoch}"
-                self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
-                self.cycles_state_dict[self.epoch] = copy.deepcopy(self.model.state_dict())
+                for i, model in enumerate(self.last_cycle_samples):
+                    save_dir = Path(self.cfg.OUTPUT_DIR) / f"cycle_epochs_ep{self.epoch}_sample{i}"
+                    self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
 
+                # Reset samples for the new cycle
+                self.last_cycle_samples = []
 
     def model_inference(self, input): # return average logits over all models
         logits = 0
@@ -124,7 +115,7 @@ class CSGHMC_CR(CoCoOp):
         # get all folders in the directory that start with "cycle_epochs_ep"
         checkpoint_paths = glob.glob(osp.join(directory, "cycle_epochs_ep*"))
         print(f"Found {len(checkpoint_paths)} checkpoints in {directory}")
-        checkpoint_paths = sorted(zip([int(p.split("/")[-1].replace("cycle_epochs_ep", "")) for p in checkpoint_paths], checkpoint_paths), key=lambda x: x[0])  # sort by epoch
+        checkpoint_paths = sorted(zip([p.split("/")[-1].replace("cycle_epochs_ep", "") for p in checkpoint_paths], checkpoint_paths), key=lambda x: x[0])  # sort by epoch
         checkpoint_paths = [p[1] for p in checkpoint_paths]
         print(f"Checkpoints: {checkpoint_paths}")
         checkpoint_paths = checkpoint_paths[:]  # load first cycle only for now
@@ -177,7 +168,21 @@ class CSGHMC_CR(CoCoOp):
             optim.step()
 
         loss_summary = {"loss": loss.item()}
+        # collect samples at the end of each cycle
+        cycle_epoch = (self.epoch + 1) % self.cycle_length
 
+        if cycle_epoch >= self.cycle_length - self.noise_last_epochs: #  
+
+            # Compute remaining number of steps in this cycle
+            steps_in_cycle = self.noise_last_epochs * self.num_batches
+            current_step_in_cycle = (cycle_epoch * self.num_batches) + self.batch_idx + 1
+            
+            # collect uniformly spaced samples
+            if self.samples_per_cycle > 0 and len(self.last_cycle_samples) < self.samples_per_cycle:
+                interval = steps_in_cycle // self.samples_per_cycle
+                if (current_step_in_cycle - (self.cycle_length - self.noise_last_epochs) * self.num_batches) % interval == 0:
+                    print(f"Collecting sample at epoch {self.epoch}, batch {self.batch_idx}")
+                    self.last_cycle_samples.append(copy.deepcopy(self.model.state_dict()))
         if (self.batch_idx + 1) == self.num_batches:
             self.update_lr()
 

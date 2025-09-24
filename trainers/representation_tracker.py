@@ -13,6 +13,7 @@ class RepresentationTracker:
         self.batch_size = 1
         # Track representation statistics per cycle
         self.cycle_representations = {}
+        self.ordered_cycle_keys = []
         
     def initialize_reference_samples(self, data_loader):
         """Initialize reference samples from training data."""
@@ -54,6 +55,7 @@ class RepresentationTracker:
         current_repr = self.extract_representation(net)
         if current_repr is not None:
             self.cycle_representations[cycle_num] = current_repr.clone()
+            self.ordered_cycle_keys.append(cycle_num)
             print(f"Updated representation for cycle {cycle_num}: {current_repr.shape}")
     def compute_procrustes_repulsion_gradients(self, net, current_cycle, repulsion_strength):
         """Compute repulsive gradients using Procrustes distance."""
@@ -64,8 +66,8 @@ class RepresentationTracker:
         past_cycles = [c for c in self.cycle_representations.keys() if c <= current_cycle]
         if not past_cycles:
             return {}
-        
-        most_recent_cycle = max(past_cycles)
+
+        most_recent_cycle = self.ordered_cycle_keys[-1]
         past_repr = self.cycle_representations[most_recent_cycle]
         
         current_repr = self.extract_representation(net)

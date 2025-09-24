@@ -142,7 +142,7 @@ def extend_cfg(cfg):
     cfg.CSGHMC.CYCLE_LENGTH = 0  # cycle length for SGH
     cfg.CSGHMC.NOISE_LAST_EPOCHS = 0  # add noise
     cfg.CSGHMC.NOISE_TEMPERATURE = 1.0  # noise temperature
-
+    cfg.CSGHMC.SAMPLES_PER_CYCLE = 1  # number of samples to save per cycle (evenly spaced)
     cfg.CSGHMC.REPULSION = CN()
     cfg.CSGHMC.REPULSION.REPULSION_STRENGTH = 0.01  # repulsion strength
     cfg.CSGHMC.REPULSION.REF_SAMPLES = 256
