@@ -31,7 +31,7 @@ class CSGHMC_CR(CoCoOp):
         self.optim.noise_last_epochs = self.cfg.CSGHMC.NOISE_LAST_EPOCHS
         self.optim.noise_temperature = self.cfg.CSGHMC.NOISE_TEMPERATURE
         self.optim.dataset_size = len(self.train_loader_x.dataset)  # for noise calculation
-        lr_scheduler = "cosine_restart" # "cosine_restart" if self.cfg.CSGHMC.CYCLE_LENGTH > 0 else "cosine"
+        lr_scheduler = "cosine" # "cosine_restart" if self.cfg.CSGHMC.CYCLE_LENGTH > 0 else "cosine"
         self.lr_scheduler_type = lr_scheduler
         self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, lr_scheduler, cycle_length=self.cycle_length, max_epoch=self.cycle_length)
         self.models = []
@@ -56,6 +56,7 @@ class CSGHMC_CR(CoCoOp):
 
     def run_epoch(self):
         """Override run_epoch to initialize reference samples and load previous cycles."""
+        cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
         if self.epoch == 0 and self.representation_tracker.reference_samples is None:
             
             rng_state = torch.get_rng_state()
@@ -72,39 +73,31 @@ class CSGHMC_CR(CoCoOp):
             self.representation_tracker.initialize_reference_samples(ref_loader)
 
             torch.set_rng_state(rng_state)
-        if (self.epoch + 1) % self.cycle_length == 0:
-            if self.epoch > 0:
-                self.current_cycle += 1
-                for i, weights in enumerate(self.last_cycle_samples):
-                    # Update representation for this cycle
-                    with torch.no_grad():
-                        # load weights to copy of the model
-                        model = copy.deepcopy(self.model)
-                        model.load_state_dict(weights)
-                        model.eval()
-                        self.representation_tracker.update_cycle_representation(model, f"cycle_{self.current_cycle - 1}_sample_{i}")
-
-                ######## Parallel Chains ########
-                # self.model.load_state_dict(self.initial_state_dict)
-                # self.model.train()
-                # self.optim.state.clear()  # Clear all accumulated state
-
-                # self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
-                
         super().run_epoch()
-        
-        if self.cycle_length > 0:
-            cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
+        if cycle_length > 0 and (self.epoch + 1) % cycle_length == 0 and self.epoch > 0 or (self.epoch + 1) == self.cfg.OPTIM.MAX_EPOCH:
             print(f'self.epoch: {self.epoch}, cycle_length: {cycle_length}, current_cycle: {self.current_cycle}, max_epoch: {self.cfg.OPTIM.MAX_EPOCH}')
-            if cycle_length > 0 and (self.epoch + 1) % cycle_length == 0 and self.epoch > 0 or (self.epoch + 1) == self.cfg.OPTIM.MAX_EPOCH:
-                print(f"Saving checkpoint at epoch {self.epoch} due to cosine restart")
+            for i, weights in enumerate(self.last_cycle_samples):
+                # load weights to copy of the model
+                model = copy.deepcopy(self.model)
+                model.load_state_dict(weights)
+                model.eval()
+                # Update representation for this cycle
+                with torch.no_grad():
+                    self.representation_tracker.update_cycle_representation(model, f"cycle_{self.current_cycle}_sample_{i}")     
+                print(f"Saving checkpoint at epoch {self.epoch} due to cosine restart")           
+                save_dir = Path(self.cfg.OUTPUT_DIR) / f"cycle_epochs_ep{self.epoch}_sample{i}"
                 model_name = "model-best.pth.tar"
-                for i, model in enumerate(self.last_cycle_samples):
-                    save_dir = Path(self.cfg.OUTPUT_DIR) / f"cycle_epochs_ep{self.epoch}_sample{i}"
-                    self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
+                self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
+        
+            self.current_cycle += 1
+            # Reset samples for the new cycle
+            self.last_cycle_samples = []
 
-                # Reset samples for the new cycle
-                self.last_cycle_samples = []
+            ######## Parallel Chains ########
+            self.model.load_state_dict(self.initial_state_dict)
+            self.model.train()
+            self.optim.state.clear()  # Clear all accumulated state
+            self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
 
     def model_inference(self, input): # return average logits over all models
         logits = 0

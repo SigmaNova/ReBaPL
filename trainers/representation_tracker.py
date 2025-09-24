@@ -13,6 +13,7 @@ class RepresentationTracker:
         self.batch_size = 1
         self.cycle_representations = {}
         self.ordered_cycle_keys = []
+        self.repulse_n_cycles = 1  # Number of past cycles to repulse from
         
     def initialize_reference_samples(self, data_loader):
         """Initialize reference samples from training data."""
@@ -59,7 +60,7 @@ class RepresentationTracker:
             raise ValueError(f"No past cycle representations to compute repulsion for cycle {current_cycle}, cycle_representations: {self.cycle_representations.keys()}")
         
         # Get most recent past cycle
-        most_recent_cycle = self.ordered_cycle_keys[-1]
+        most_recent_cycle = self.ordered_cycle_keys[-1] # get latest cycle key 
         past_repr = self.cycle_representations[most_recent_cycle].detach()  # Detach past representation
         
         current_repr = self.extract_representation(net)
