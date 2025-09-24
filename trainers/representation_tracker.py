@@ -11,7 +11,6 @@ class RepresentationTracker:
         self.regularization_strength = regularization_strength
         self.reference_samples = None
         self.batch_size = 1
-        # Track representation statistics per cycle
         self.cycle_representations = {}
         self.ordered_cycle_keys = []
         
@@ -72,19 +71,11 @@ class RepresentationTracker:
         
         current_repr = self.extract_representation(net)
         
-        # Compute Procrustes-based repulsive force
         force_matrix = self._compute_procrustes_force(current_repr, past_repr, repulsion_strength)
         mean_force = force_matrix.mean(dim=0)
         
-        # Clamp force magnitude to prevent instability
-        force_norm = torch.norm(mean_force)
-        if force_norm > 10.0:
-            mean_force = mean_force * (10.0 / force_norm)
-        
-        # Compute gradients w.r.t. network parameters
         current_mean = current_repr.mean(dim=0)
         
-        # Fix 4: Filter parameters that require gradients
         grad_params = [p for p in net.parameters() if p.requires_grad]
         
         param_grads = torch.autograd.grad(
@@ -95,7 +86,6 @@ class RepresentationTracker:
             retain_graph=False
         )
         
-        # Create gradient dictionary
         grad_dict = {}
         for param, grad in zip(grad_params, param_grads):
             if grad is not None and not (torch.isnan(grad).any() or torch.isinf(grad).any()):
