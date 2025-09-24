@@ -14,6 +14,8 @@ import copy
 from .maple import MaPLe  # 
 from .independentVL import IVLP
 from .cocoop import CoCoOp
+from .coop import CoOp
+
 
 from pathlib import Path
 import glob 
@@ -31,14 +33,17 @@ class CSGHMC_CR(CoCoOp):
         self.optim.noise_last_epochs = self.cfg.CSGHMC.NOISE_LAST_EPOCHS
         self.optim.noise_temperature = self.cfg.CSGHMC.NOISE_TEMPERATURE
         self.optim.dataset_size = len(self.train_loader_x.dataset)  # for noise calculation
-        lr_scheduler = "cosine" # "cosine_restart" if self.cfg.CSGHMC.CYCLE_LENGTH > 0 else "cosine"
+        # self.cycles_state_dict = {}
+        if self.cfg.CSGHMC.CHAINS == "parallel":
+            self.initial_state_dict = copy.deepcopy(self.model.state_dict())
+            lr_scheduler = "cosine"
+        else: 
+            lr_scheduler = "cosine_restart"
+
         self.lr_scheduler_type = lr_scheduler
         self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, lr_scheduler, cycle_length=self.cycle_length, max_epoch=self.cycle_length)
         self.models = []
-        # self.cycles_state_dict = {}
-        self.initial_state_dict = copy.deepcopy(self.model.state_dict())
-
-
+        
         #### Repulsion between cycles ####
         # Initialize RepresentationTracker for inter-cycle repulsion
         self.representation_tracker = RepresentationTracker(
@@ -94,16 +99,20 @@ class CSGHMC_CR(CoCoOp):
             self.last_cycle_samples = []
 
             ######## Parallel Chains ########
-            self.model.load_state_dict(self.initial_state_dict)
-            self.model.train()
-            self.optim.state.clear()  # Clear all accumulated state
-            self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
+            if self.cfg.CSGHMC.CHAINS == "parallel":
+                print("Using parallel chains: resetting model to initial state.")
+                self.model.load_state_dict(self.initial_state_dict)
+                self.model.train()
+                self.optim.state.clear()  # Clear all accumulated state
+                self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
 
     def model_inference(self, input): # return average logits over all models
         logits = 0
         for model in self.models:
+            # model = model.to(self.device)
             with torch.inference_mode():
                 logits += model(input)
+            # model = model.to("cpu")
         return logits / len(self.models)
     
     def load_model(self, directory, epoch=None):

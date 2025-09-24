@@ -148,6 +148,7 @@ def extend_cfg(cfg):
     cfg.CSGHMC.REPULSION.REF_SAMPLES = 256
     cfg.CSGHMC.REPULSION.REG_STRENGTH = 1e-6
     cfg.CSGHMC.REPULSION.BATCH_SIZE = 1
+    cfg.CSGHMC.CHAINS = "parallel"  # independent or parallel
 
     cfg.TRAINER.APP = CN()
     cfg.TRAINER.APP.N_CTX = 16  # number of context vectors

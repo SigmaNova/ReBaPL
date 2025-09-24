@@ -51,10 +51,10 @@ class SGHMC(torch.optim.SGD):
                     # Include noise on the last N epochs of each cycle
                     cycle_epoch = (self.epoch + 1) % self.cycle_length
                     if cycle_epoch >= self.cycle_length - self.noise_last_epochs:
-                        noise_std = math.sqrt(2 * weight_decay * current_lr)
+                        # noise_std = math.sqrt(2 * weight_decay * current_lr)
                         # buf_new += (2.0*lr*args.alpha*args.temperature/datasize)**.5*eps
-                        # noise_std = (2.0 * current_lr * momentum * self.noise_temperature / self.dataset_size)**0.5
-                        noise = torch.randn_like(param) * noise_std * self.noise_temperature
+                        noise_std = (2.0 * current_lr * momentum)**0.5 / self.dataset_size
+                        noise = torch.randn_like(param) * noise_std # * self.noise_temperature
                         buf.add_(noise)
 
                 # Update parameters

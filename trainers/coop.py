@@ -8,7 +8,9 @@ from torch.cuda.amp import GradScaler, autocast
 from dassl.engine import TRAINER_REGISTRY, TrainerX
 from dassl.metrics import compute_accuracy
 from dassl.utils import load_pretrained_weights, load_checkpoint
-from dassl.optim import build_optimizer, build_lr_scheduler
+from dassl.optim import build_lr_scheduler
+from .optimizers import build_optimizer
+
 
 from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
@@ -195,7 +197,7 @@ class CustomCLIP(nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
 
-    def forward(self, image):
+    def forward(self, image, return_text_features=False):
         image_features = self.image_encoder(image.type(self.dtype))
 
         prompts = self.prompt_learner()
@@ -207,7 +209,9 @@ class CustomCLIP(nn.Module):
 
         logit_scale = self.logit_scale.exp()
         logits = logit_scale * image_features @ text_features.t()
-
+        if return_text_features:
+            return logits, text_features
+        
         return logits
 
 
