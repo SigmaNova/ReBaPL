@@ -19,7 +19,8 @@ from .coop import CoOp
 
 from pathlib import Path
 import glob 
-from torch.amp import autocast
+#from torch.amp import autocast
+from torch.cuda.amp import autocast
 
 from .representation_tracker import RepresentationTracker
 
