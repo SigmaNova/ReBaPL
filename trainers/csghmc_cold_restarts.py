@@ -197,7 +197,7 @@ class CSGHMC_CR(CoCoOp):
     def _add_repulsion_gradients(self):
         """Add Procrustes-based repulsion gradients to current gradients."""
         # Get repulsion gradients from representation tracker
-        repulsion_grads = self.representation_tracker.compute_procrustes_repulsion_gradients(
+        repulsion_grads = self.representation_tracker.compute_repulsion_gradients(
             net=self.model,
             current_cycle=self.current_cycle,
             repulsion_strength=self.repulsion_strength

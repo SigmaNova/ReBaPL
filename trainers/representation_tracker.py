@@ -1,12 +1,25 @@
 import torch
 import torch.nn 
+from typing import Optional, Dict, Literal
+from trainers.distances import (
+    mse_distance,
+    wasserstein_distance,
+    mmd_distance
+)
 
 use_cuda = torch.cuda.is_available()
 
 class RepresentationTracker:
     """Tracks representation statistics for inter-cycle repulsion using Procrustes distance."""
     
-    def __init__(self, device, num_ref_samples=128, regularization_strength=1e-6, batch_size=1):
+    def __init__(
+        self,
+        device: torch.device,
+        num_ref_samples: int = 128,
+        regularization_strength: float = 1e-6,
+        batch_size: int = 1,
+        distance: Literal['mse', 'wasserstein', 'mmd'] = 'mse'
+    ):
         self.device = device
         self.num_ref_samples = num_ref_samples
         self.regularization_strength = regularization_strength
@@ -15,6 +28,7 @@ class RepresentationTracker:
         self.cycle_representations = {}
         self.ordered_cycle_keys = []
         self.repulse_n_cycles = 1  # Number of past cycles to repulse from
+        self.distance = distance
         
     def initialize_reference_samples(self, data_loader):
         """Initialize reference samples from training data."""
@@ -37,15 +51,14 @@ class RepresentationTracker:
             self.reference_samples = self.reference_samples.cuda()
         
         print(f"Reference samples initialized: {self.reference_samples.shape}")
-    
-    
-    def extract_representation(self, net):
+
+    def extract_representation(self, net: torch.nn.Module) -> Optional[torch.Tensor]:
         """Extract representation using reference samples and registered hooks."""
         if self.reference_samples is None:
             return None
         return net(self.reference_samples, return_text_features=True)[1]
-    
-    def update_cycle_representation(self, net, cycle_num):
+
+    def update_cycle_representation(self, net: torch.nn.Module, cycle_num: int):
         """Update the representation for the current cycle."""
         current_repr = self.extract_representation(net)
         if current_repr is not None:
@@ -53,7 +66,12 @@ class RepresentationTracker:
             self.ordered_cycle_keys.append(cycle_num)
             print(f"Updated representation for cycle {cycle_num}: {current_repr.shape}")
 
-    def compute_procrustes_repulsion_gradients(self, net, current_cycle, repulsion_strength):
+    def compute_repulsion_gradients(
+        self,
+        net: torch.nn.Module,
+        current_cycle: int,
+        repulsion_strength: float
+    ) -> Dict[torch.nn.parameter.Parameter, torch.Tensor]:
         """Compute repulsive gradients using Procrustes distance."""
         if repulsion_strength==0 or current_cycle < 0 or self.reference_samples is None: 
             return {}
@@ -65,18 +83,20 @@ class RepresentationTracker:
         past_repr = self.cycle_representations[most_recent_cycle].detach()  # Detach past representation
         
         current_repr = self.extract_representation(net)
+        if current_repr is None:
+            return {}
 
         if self.batch_size < len(self.reference_samples) and self.batch_size != -1:
             # Use all reference samples if batch_size == -1
             randperm = torch.randperm(current_repr.size(0))
             current_repr = current_repr[randperm][:self.batch_size]
             past_repr = past_repr[randperm][:self.batch_size]
-        force_matrix = self._compute_procrustes_force(current_repr, past_repr, repulsion_strength)
+        force_potential = self.compute_repulsion_matrix(current_repr, past_repr, repulsion_strength)
         
         grad_params = [p for p in net.parameters() if p.requires_grad]
         
         param_grads = torch.autograd.grad(
-            outputs=force_matrix.mean(),
+            outputs=force_potential,
             inputs=grad_params,
             grad_outputs=None,
             allow_unused=True,
@@ -89,15 +109,21 @@ class RepresentationTracker:
                 grad_dict[param] = grad
         return grad_dict
             
-    def _compute_procrustes_force(self, current_repr, past_repr, repulsion_strength):
+    def compute_repulsion_matrix(self, current_repr, past_repr, repulsion_strength):
         eps = 1e-6
-
-        dist_vector = torch.norm(current_repr - past_repr, p=2, dim=1)
-
-        force_vector = torch.reciprocal(torch.square(dist_vector) + eps)
+        
+        if self.distance == 'mse':
+            force_vector = mse_distance(current_repr, past_repr) + eps
+            potential = torch.reciprocal(force_vector).mean()
+        elif self.distance == 'wasserstein':
+            potential = torch.reciprocal(wasserstein_distance(current_repr, past_repr) + eps)
+        elif self.distance == 'mmd':
+            potential = torch.reciprocal(mmd_distance(current_repr, past_repr) + eps)
+        else:
+            raise ValueError(f"Unknown distance metric: {self.distance}")
 
         # Simple: force proportional to difference (like springs)
-        return repulsion_strength * force_vector  # Pushes away proportionally
+        return repulsion_strength * potential  # Pushes away proportionally
     
         # if current_repr.shape != past_repr.shape:
         #     min_samples = min(current_repr.shape[0], past_repr.shape[0])
