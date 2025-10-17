@@ -1,4 +1,5 @@
-import torch 
+import torch
+import torch.nn 
 
 use_cuda = torch.cuda.is_available()
 
@@ -10,7 +11,7 @@ class RepresentationTracker:
         self.num_ref_samples = num_ref_samples
         self.regularization_strength = regularization_strength
         self.reference_samples = None
-        self.batch_size = 1
+        self.batch_size = batch_size
         self.cycle_representations = {}
         self.ordered_cycle_keys = []
         self.repulse_n_cycles = 1  # Number of past cycles to repulse from
@@ -64,7 +65,9 @@ class RepresentationTracker:
         past_repr = self.cycle_representations[most_recent_cycle].detach()  # Detach past representation
         
         current_repr = self.extract_representation(net)
-        if self.batch_size < len(self.reference_samples):
+
+        if self.batch_size < len(self.reference_samples) and self.batch_size != -1:
+            # Use all reference samples if batch_size == -1
             randperm = torch.randperm(current_repr.size(0))
             current_repr = current_repr[randperm][:self.batch_size]
             past_repr = past_repr[randperm][:self.batch_size]
@@ -73,9 +76,9 @@ class RepresentationTracker:
         grad_params = [p for p in net.parameters() if p.requires_grad]
         
         param_grads = torch.autograd.grad(
-            outputs=current_repr,
+            outputs=force_matrix.mean(),
             inputs=grad_params,
-            grad_outputs=force_matrix,
+            grad_outputs=None,
             allow_unused=True,
             retain_graph=False
         )
@@ -87,9 +90,14 @@ class RepresentationTracker:
         return grad_dict
             
     def _compute_procrustes_force(self, current_repr, past_repr, repulsion_strength):
-        diff_matrix = current_repr - past_repr
+        eps = 1e-6
+
+        dist_vector = torch.norm(current_repr - past_repr, p=2, dim=1)
+
+        force_vector = torch.reciprocal(torch.square(dist_vector) + eps)
+
         # Simple: force proportional to difference (like springs)
-        return repulsion_strength * diff_matrix  # Pushes away proportionally
+        return repulsion_strength * force_vector  # Pushes away proportionally
     
         # if current_repr.shape != past_repr.shape:
         #     min_samples = min(current_repr.shape[0], past_repr.shape[0])
