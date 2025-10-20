@@ -10,7 +10,14 @@ from trainers.distances import (
 use_cuda = torch.cuda.is_available()
 
 class RepresentationTracker:
-    """Tracks representation statistics for inter-cycle repulsion using Procrustes distance."""
+    """
+    Tracks representation statistics for inter-cycle repulsion using configurable distance metrics.
+    Supports multiple distance metrics for repulsion between cycle representations, including:
+        - Mean Squared Error (MSE)
+        - Wasserstein distance
+        - Maximum Mean Discrepancy (MMD)
+    The distance metric can be selected via the `distance` parameter.
+    """
     
     def __init__(
         self,
@@ -72,7 +79,7 @@ class RepresentationTracker:
         current_cycle: int,
         repulsion_strength: float
     ) -> Dict[torch.nn.parameter.Parameter, torch.Tensor]:
-        """Compute repulsive gradients using Procrustes distance."""
+        """Compute repulsive gradients using probability metrics."""
         if repulsion_strength==0 or current_cycle < 0 or self.reference_samples is None: 
             return {}
         if current_cycle > 0 and not self.cycle_representations:
@@ -133,6 +140,18 @@ class RepresentationTracker:
         return grad_dict
             
     def compute_repulsion_matrix(self, current_repr, past_repr, repulsion_strength):
+        """
+        Compute the scalar repulsion potential between two representations using the selected distance metric.
+        Args:
+            current_repr (torch.Tensor): The current representation tensor, typically of shape [batch_size, feature_dim].
+            past_repr (torch.Tensor): The past representation tensor, typically of shape [batch_size, feature_dim].
+            repulsion_strength (float): Scalar factor to scale the repulsion potential.
+        Behavior:
+            The method selects the distance metric based on self.distance ('mse', 'wasserstein', or 'mmd').
+            It computes the reciprocal of the distance (with a small epsilon for stability) as the repulsion potential.
+        Returns:
+            torch.Tensor: A scalar tensor representing the repulsion potential between the two representations.
+        """
         eps = 1e-6
         
         if self.distance == 'mse':
