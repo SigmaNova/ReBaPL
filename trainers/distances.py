@@ -5,7 +5,7 @@ from typing import Literal
 
 def mse_potential(z0: torch.Tensor, z1: torch.Tensor) -> torch.Tensor:
     dists = torch.square(torch.norm(z0 - z1, p=2, dim=1))  # type: ignore
-    return torch.reciprocal(dists).mean()
+    return dists
 
 
 def wasserstein_distance(

@@ -105,15 +105,38 @@ class RepresentationTracker:
         
         grad_dict = {}
         for param, grad in zip(grad_params, param_grads):
-            if grad is not None and not (torch.isnan(grad).any() or torch.isinf(grad).any()):
-                grad_dict[param] = grad
+            if grad is None:
+                print(f"Warning: Computed gradient is None for a parameter. See: {force_potential=}, {grad_params=}")
+                continue
+
+            if torch.isnan(grad).any():
+                print(f"Warning: Computed gradient contains NaNs for a parameter. See: {force_potential=}")
+                for p in grad_params:
+                    if torch.isnan(p).any():
+                        print("Got at least one parameter with NaNs.")
+                    if p.grad is not None and torch.isnan(p.grad).any():
+                        print("Got at least one parameter with NanGrad.")
+                continue
+
+            if torch.isinf(grad).any():
+                print(f"Warning: Computed gradient contains Infs for a parameter. See: {force_potential=}")
+
+                for p in grad_params:
+                    if torch.isinf(p).any():
+                        print("Got at least one parameter with Infs.")
+                    if p.grad is not None and torch.isinf(p.grad).any():
+                        print("Got at least one parameter with InfGrad.")
+
+                continue
+
+            grad_dict[param] = grad
         return grad_dict
             
     def compute_repulsion_matrix(self, current_repr, past_repr, repulsion_strength):
         eps = 1e-6
         
         if self.distance == 'mse':
-            dist = mse_potential(current_repr, past_repr)
+            dist = mse_potential(current_repr, past_repr).mean()
         elif self.distance == 'wasserstein':
             dist = wasserstein_distance(current_repr, past_repr)
         elif self.distance == 'mmd':
