@@ -7,7 +7,8 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp.grad_scaler import GradScaler
+from torch.cuda.amp.autocast_mode import autocast
 import numpy as np
 from scipy.linalg import orthogonal_procrustes
 
@@ -153,7 +154,7 @@ class RepresentationTracker:
         except Exception as e:
             print(f"Failed to update cycle representation: {e}")
     
-    def compute_procrustes_repulsion_gradients(self, net, current_cycle, repulsion_strength):
+    def compute_repulsion_gradients(self, net, current_cycle, repulsion_strength):
         """Compute repulsive gradients using Procrustes distance."""
         if repulsion_strength <= 0 or current_cycle == 0 or not self.cycle_representations:
             return {}
@@ -697,7 +698,7 @@ class CoCoOp_rcSGHMC(TrainerX):
     def _add_repulsion_gradients(self):
         """Add Procrustes-based repulsion gradients to current gradients."""
         # Get repulsion gradients from representation tracker
-        repulsion_grads = self.representation_tracker.compute_procrustes_repulsion_gradients(
+        repulsion_grads = self.representation_tracker.compute_repulsion_gradients(
             net=self.model,
             current_cycle=self.current_cycle,
             repulsion_strength=self.repulsion_strength
