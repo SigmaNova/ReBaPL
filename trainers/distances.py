@@ -3,8 +3,9 @@ import torch
 from typing import Literal
 
 
-def mse_distance(z0: torch.Tensor, z1: torch.Tensor) -> torch.Tensor:
-    return torch.square(torch.norm(z0 - z1, p=2, dim=1))  # type: ignore
+def mse_potential(z0: torch.Tensor, z1: torch.Tensor) -> torch.Tensor:
+    dists = torch.square(torch.norm(z0 - z1, p=2, dim=1))  # type: ignore
+    return torch.reciprocal(dists).mean()
 
 
 def wasserstein_distance(
@@ -13,14 +14,15 @@ def wasserstein_distance(
     eps: float = 0.0
 ) -> torch.Tensor:
     a = torch.ones(z0.shape[0], device=z0.device) / z0.shape[0]
-    b = torch.ones(z1.shape[0], device=z1.device) / z1.shape[1]
+    b = torch.ones(z1.shape[0], device=z1.device) / z1.shape[0]
     C = torch.cdist(z0, z1, p=2) ** 2
 
     with torch.no_grad():
         if eps > 0:
-            pi = ot.sinkhorn(a, b, C / C.max(), reg=eps, numItermax=100)
+            pi: torch.Tensor = ot.sinkhorn(  # type: ignore
+                a, b, C / C.max(), reg=eps, numItermax=100)
         else:
-            pi = ot.emd(a, b, C)
+            pi: torch.Tensor = ot.emd(a, b, C)  # type: ignore
 
     return torch.sum(pi * C)
 

@@ -2,7 +2,7 @@ import torch
 import torch.nn 
 from typing import Optional, Dict, Literal
 from trainers.distances import (
-    mse_distance,
+    mse_potential,
     wasserstein_distance,
     mmd_distance
 )
@@ -113,14 +113,14 @@ class RepresentationTracker:
         eps = 1e-6
         
         if self.distance == 'mse':
-            force_vector = mse_distance(current_repr, past_repr) + eps
-            potential = torch.reciprocal(force_vector).mean()
+            dist = mse_potential(current_repr, past_repr)
         elif self.distance == 'wasserstein':
-            potential = torch.reciprocal(wasserstein_distance(current_repr, past_repr) + eps)
+            dist = wasserstein_distance(current_repr, past_repr)
         elif self.distance == 'mmd':
-            potential = torch.reciprocal(mmd_distance(current_repr, past_repr) + eps)
+            dist = mmd_distance(current_repr, past_repr)
         else:
             raise ValueError(f"Unknown distance metric: {self.distance}")
+        potential = torch.reciprocal(dist + eps)
 
         # Simple: force proportional to difference (like springs)
         return repulsion_strength * potential  # Pushes away proportionally
