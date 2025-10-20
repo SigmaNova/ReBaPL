@@ -1,6 +1,7 @@
 import os.path as osp
 import torch
 import math
+from torch.utils.data import DataLoader
 
 from dassl.engine import TRAINER_REGISTRY
 from .schedulers import build_lr_scheduler
@@ -20,7 +21,7 @@ from .coop import CoOp
 from pathlib import Path
 import glob 
 #from torch.amp import autocast
-from torch.cuda.amp import autocast
+from torch.cuda.amp.autocast_mode import autocast
 
 from .representation_tracker import RepresentationTracker
 
@@ -51,7 +52,8 @@ class CSGHMC_CR_MAPLE(MaPLe):
             device=self.device,
             num_ref_samples=self.cfg.CSGHMC.REPULSION.REF_SAMPLES,
             regularization_strength=self.cfg.CSGHMC.REPULSION.REG_STRENGTH,
-            batch_size=self.cfg.CSGHMC.REPULSION.BATCH_SIZE
+            batch_size=self.cfg.CSGHMC.REPULSION.BATCH_SIZE,
+            distance=self.cfg.CSGHMC.REPULSION.DISTANCE_TYPE
         )
         # Inter-cycle repulsion parameters
         self.repulsion_strength = self.cfg.CSGHMC.REPULSION.REPULSION_STRENGTH
@@ -68,7 +70,7 @@ class CSGHMC_CR_MAPLE(MaPLe):
             rng_state = torch.get_rng_state()
 
             train_dataset = self.train_loader_x.dataset
-            ref_loader = torch.utils.data.DataLoader(
+            ref_loader = DataLoader(
                 train_dataset,
                 batch_size=32,
                 shuffle=True, # This is now safe to use
@@ -197,7 +199,7 @@ class CSGHMC_CR_MAPLE(MaPLe):
     def _add_repulsion_gradients(self):
         """Add Procrustes-based repulsion gradients to current gradients."""
         # Get repulsion gradients from representation tracker
-        repulsion_grads = self.representation_tracker.compute_procrustes_repulsion_gradients(
+        repulsion_grads = self.representation_tracker.compute_repulsion_gradients(
             net=self.model,
             current_cycle=self.current_cycle,
             repulsion_strength=self.repulsion_strength
