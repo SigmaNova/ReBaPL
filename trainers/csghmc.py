@@ -2,6 +2,8 @@ import os.path as osp
 import torch
 import math
 
+from torch.utils.data import DataLoader
+
 from dassl.engine import TRAINER_REGISTRY
 from .schedulers import build_lr_scheduler
 # from .optimizers import build_optimizer
@@ -14,7 +16,7 @@ from .maple import MaPLe  #
 from .independentVL import IVLP
 from pathlib import Path
 import glob 
-from torch.cuda.amp import autocast
+from torch.cuda.amp.autocast_mode import autocast
 from .cocoop import CoCoOp
 
 from .representation_tracker import RepresentationTracker
@@ -54,7 +56,7 @@ class CSGHMC(CoCoOp):
             rng_state = torch.get_rng_state()
 
             train_dataset = self.train_loader_x.dataset
-            ref_loader = torch.utils.data.DataLoader(
+            ref_loader = DataLoader(
                 train_dataset,
                 batch_size=32,
                 shuffle=True, # This is now safe to use
