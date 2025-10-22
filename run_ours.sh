@@ -24,7 +24,7 @@ if [ "$overwrite" = "true" ]; then
   [ -d "output/base2new/test_new/$dataset/shots_16/CSGHMC_CR_MAPLE/$CFG/seed$seed" ] && rm -rf "output/base2new/test_new/$dataset/shots_16/CSGHMC_CR_MAPLE/$CFG/seed$seed" && echo "Removed test checkpoint."
 fi
 
-CUDA_VISIBLE_DEVICES=$DEVICE ./scripts/${trainer}/base2new_train.sh $dataset $seed $CFG
-CUDA_VISIBLE_DEVICES=$DEVICE ./scripts/${trainer}/base2new_test.sh $dataset $seed $CFG
+CUDA_VISIBLE_DEVICES=$DEVICE bash ./scripts/${trainer}/base2new_train.sh $dataset $seed $CFG
+CUDA_VISIBLE_DEVICES=$DEVICE bash ./scripts/${trainer}/base2new_test.sh $dataset $seed $CFG
 # CUDA_VISIBLE_DEVICES=$DEVICE ./scripts/${trainer}/base2new_train_maple.sh $dataset $seed
 # CUDA_VISIBLE_DEVICES=$DEVICE ./scripts/${trainer}/base2new_test_maple.sh $dataset $seed
