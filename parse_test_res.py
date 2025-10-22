@@ -202,6 +202,7 @@ def parse_function(*metrics, directory="", args=None, end_signal=None):
         msg += f"{msg_one}\n"
 
     output_results = OrderedDict()
+    output_results["_used_files"] = []  # Track which files were actually used
 
     print("===")
     print(f"Summary of directory: {directory}")
@@ -215,6 +216,12 @@ def parse_function(*metrics, directory="", args=None, end_signal=None):
         output_results[key] = avg
         output_results[f"{key}_std"] = std
         output_results[f"{key}_values"] = values
+    
+    # Store the list of files that were used for metrics
+    for output in outputs:
+        if "file" in output:
+            output_results["_used_files"].append(output["file"])
+    
     print("===")
     msg += "\n==="
     with open(msg_dir, 'w') as write:
@@ -330,6 +337,9 @@ def main(args, end_signal):
             print(f"Warning: Failed to start MLflow run: {e}")
             print("Continuing without MLflow logging.")
     
+    # Track all used log files across all splits and metrics
+    all_used_files = set()
+    
     for split_type, split_name in splits_to_parse:
         print(f"\n{'='*60}")
         print(f"Processing {split_name.upper()} classes ({split_type})")
@@ -350,6 +360,12 @@ def main(args, end_signal):
             
             if results:
                 all_results[split_name][metric['name']] = results
+                
+                # Collect the files that were used for this metric
+                if "_used_files" in results:
+                    for fpath in results["_used_files"]:
+                        all_used_files.add((fpath, split_name))
+                
                 # Log metrics to the single MLflow run
                 if mlflow_run is not None:
                     try:
@@ -373,6 +389,35 @@ def main(args, end_signal):
                     except Exception as e:
                         print(f"Warning: Failed to log {split_name} metrics to MLflow: {e}")
     
+    # Upload only the log files that were actually used for computing metrics
+    if mlflow_run is not None and len(all_used_files) > 0:
+        try:
+            import mlflow
+            import shutil
+            print(f"\nUploading {len(all_used_files)} log files to MLflow...")
+            
+            for log_file, split_name in all_used_files:
+                if osp.isfile(log_file):
+                    # Extract seed directory name from the path
+                    seed_dir = osp.basename(osp.dirname(log_file))
+                    
+                    # Create a temporary copy with standardized name
+                    temp_dir = "/tmp/mlflow_logs"
+                    os.makedirs(temp_dir, exist_ok=True)
+                    temp_file = osp.join(temp_dir, "log.txt")
+                    shutil.copy(log_file, temp_file)
+                    
+                    # Create artifact path with split name and seed
+                    artifact_path = f"logs/{split_name}/{seed_dir}"
+                    mlflow.log_artifact(temp_file, artifact_path)
+                    
+                    # Clean up temp file
+                    os.remove(temp_file)
+                    
+                    print(f"Logged {log_file} to MLflow artifacts at {artifact_path}/log.txt")
+                    
+        except Exception as e:
+            print(f"Warning: Failed to log files to MLflow: {e}")
     # Print summary if both splits were parsed
     if len(all_results) == 2 and "base" in all_results and "novel" in all_results:
         print(f"\n{'='*60}")
