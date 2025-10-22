@@ -286,16 +286,16 @@ def log_to_mlflow(results, experiment_name, run_name, args, extra_params=None):
 
 
 def main(args, end_signal):
-    metric = {
-        "name": args.keyword,
-        "regex": re.compile(fr"\* {args.keyword}: ([\.\deE+-]+)%"),
-    }
+    metrics = [{
+        "name": keyword,
+        "regex": re.compile(fr"\* {keyword}: ([\.\deE+-]+)%")
+        } for keyword in ["accuracy", "macro_f1"]]
 
     # Determine which splits to parse
     splits_to_parse = []
     splits_to_parse.append(("train_base", "base"))
     splits_to_parse.append(("test_new", "novel"))
-    all_results = {}
+    all_results = {"base": {}, "novel": {}}
     
     # Start a single MLflow run for all results if enabled
     mlflow_run = None
@@ -322,7 +322,6 @@ def main(args, end_signal):
             mlflow.log_param("trainer", args.trainer)
             mlflow.log_param("config", args.config)
             mlflow.log_param("ci95", args.ci95)
-            mlflow.log_param("keyword", args.keyword)
             
         except ImportError:
             print("Warning: MLflow not installed. Install with: pip install mlflow")
@@ -344,60 +343,63 @@ def main(args, end_signal):
         if not osp.exists(directory):
             print(f"Warning: Directory does not exist: {directory}")
             continue
-        
-        results = parse_function(
-            metric, directory=directory, args=args, end_signal=end_signal
-        )
-        
-        if results:
-            all_results[split_name] = results
+        for metric in metrics:
+            results = parse_function(
+                metric, directory=directory, args=args, end_signal=end_signal
+            )
             
-            # Log metrics to the single MLflow run
-            if mlflow_run is not None:
-                try:
-                    import mlflow
-                    
-                    # Log mean accuracy
-                    if args.keyword in results:
-                        mlflow.log_metric(f"{split_name}_{args.keyword}", results[args.keyword])
-                    
-                    # Log std/ci95
-                    std_key = f"{args.keyword}_std"
-                    if std_key in results:
-                        metric_name = f"{split_name}_{args.keyword}_ci95" if args.ci95 else f"{split_name}_{args.keyword}_std"
-                        mlflow.log_metric(metric_name, results[std_key])
-                    
-                    # Log individual seed values
-                    values_key = f"{args.keyword}_values"
-                    if values_key in results:
-                        for idx, val in enumerate(results[values_key]):
-                            mlflow.log_metric(f"{split_name}_{args.keyword}_seed{idx+1}", val)
-                    
-                except Exception as e:
-                    print(f"Warning: Failed to log {split_name} metrics to MLflow: {e}")
+            if results:
+                all_results[split_name][metric['name']] = results
+                # Log metrics to the single MLflow run
+                if mlflow_run is not None:
+                    try:
+                        import mlflow
+                        
+                        # Log mean accuracy
+                        mlflow.log_metric(f"{split_name}_{metric['name']}", results[metric['name']])
+                        
+                        # Log std/ci95
+                        std_key = f"{metric['name']}_std"
+                        if std_key in results:
+                            metric_name = f"{split_name}_{metric['name']}_ci95" if args.ci95 else f"{split_name}_{metric['name']}_std"
+                            mlflow.log_metric(metric_name, results[std_key])
+                        
+                        # Log individual seed values
+                        values_key = f"{metric['name']}_values"
+                        if values_key in results:
+                            for idx, val in enumerate(results[values_key]):
+                                mlflow.log_metric(f"{split_name}_{metric['name']}_seed{idx+1}", val)
+                        
+                    except Exception as e:
+                        print(f"Warning: Failed to log {split_name} metrics to MLflow: {e}")
     
     # Print summary if both splits were parsed
     if len(all_results) == 2 and "base" in all_results and "novel" in all_results:
         print(f"\n{'='*60}")
         print("SUMMARY: Base and Novel Classes")
         print(f"{'='*60}")
-        
-        base_acc = all_results["base"].get(args.keyword, 0)
-        novel_acc = all_results["novel"].get(args.keyword, 0)
-        harmonic_mean = 2 * (base_acc * novel_acc) / (base_acc + novel_acc) if (base_acc + novel_acc) > 0 else 0
-        
-        print(f"Base classes accuracy:  {base_acc:.2f}%")
-        print(f"Novel classes accuracy: {novel_acc:.2f}%")
-        print(f"Harmonic mean (H):      {harmonic_mean:.2f}%")
-        print(f"{'='*60}")
-        
-        # Log harmonic mean to the single MLflow run
-        if mlflow_run is not None:
-            try:
-                import mlflow
-                mlflow.log_metric("harmonic_mean", harmonic_mean)
-            except Exception as e:
-                print(f"Warning: Failed to log harmonic mean to MLflow: {e}")
+        for metric in metrics:
+            base_results = all_results["base"].get(metric['name'], {})
+            novel_results = all_results["novel"].get(metric['name'], {})
+            
+            # Extract the accuracy values from the OrderedDict
+            base_acc = base_results.get(metric['name'], 0) if isinstance(base_results, dict) else 0
+            novel_acc = novel_results.get(metric['name'], 0) if isinstance(novel_results, dict) else 0
+            
+            harmonic_mean = 2 * (base_acc * novel_acc) / (base_acc + novel_acc) if (base_acc + novel_acc) > 0 else 0
+            
+            print(f"Base classes {metric['name']}:  {base_acc:.2f}%")
+            print(f"Novel classes {metric['name']}: {novel_acc:.2f}%")
+            print(f"Harmonic mean (H):      {harmonic_mean:.2f}%")
+            print(f"{'='*60}")
+            
+            # Log harmonic mean to the single MLflow run
+            if mlflow_run is not None:
+                try:
+                    import mlflow
+                    mlflow.log_metric(f"{metric['name']}/harmonic_mean", harmonic_mean)
+                except Exception as e:
+                    print(f"Warning: Failed to log harmonic mean to MLflow: {e}")
     
     # End the single MLflow run
     if mlflow_run is not None:
