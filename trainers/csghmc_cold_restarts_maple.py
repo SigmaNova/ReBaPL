@@ -103,8 +103,24 @@ class CSGHMC_CR_MAPLE(MaPLe):
 
             ######## Parallel Chains ########
             if self.cfg.CSGHMC.CHAINS == "parallel":
-                print("Using parallel chains: resetting model to initial state.")
-                self.model.load_state_dict(self.initial_state_dict)
+                print("Using parallel chains: reinitializing prompt weights randomly.")
+                # Reinitialize prompt learner parameters instead of loading initial state
+                prompt_learner = self.model.prompt_learner
+                
+                # Reinitialize main context vectors (shallow prompts)
+                torch.nn.init.normal_(prompt_learner.ctx, std=0.02)
+                
+                # Reinitialize compound prompts (deeper layers)
+                for param in prompt_learner.compound_prompts_text:
+                    torch.nn.init.normal_(param, std=0.02)
+                
+                # Reinitialize projection layers
+                for layer in [prompt_learner.proj] + list(prompt_learner.compound_prompt_projections):
+                    if isinstance(layer, torch.nn.Linear):
+                        torch.nn.init.xavier_uniform_(layer.weight)
+                        if layer.bias is not None:
+                            torch.nn.init.zeros_(layer.bias)
+
                 self.model.train()
                 self.optim.state.clear()  # Clear all accumulated state
                 self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
