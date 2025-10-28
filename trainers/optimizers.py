@@ -27,7 +27,7 @@ class SGHMC(torch.optim.SGD):
         current_lr = self.param_groups[0]['lr']
         weight_decay = self.param_groups[0]['weight_decay']
         momentum = self.param_groups[0]['momentum']
-
+        print("SGHMC step: current_lr =", current_lr, " weight_decay =", weight_decay, " momentum =", momentum)
         for group in self.param_groups:
             for i, param in enumerate(group['params']):
                 if param.grad is None:

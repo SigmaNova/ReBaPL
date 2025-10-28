@@ -258,7 +258,6 @@ class MaPLe(TrainerX):
         self.optim = build_optimizer(self.model, cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
         self.register_model("MultiModalPromptLearner", self.model, self.optim, self.sched)
-
         self.scaler = GradScaler() if cfg.TRAINER.MAPLE.PREC == "amp" else None
 
         # Note that multi-gpu training could be slow because CLIP's size is

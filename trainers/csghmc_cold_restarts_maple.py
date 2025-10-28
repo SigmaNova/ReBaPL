@@ -30,6 +30,7 @@ from .representation_tracker import RepresentationTracker
 class CSGHMC_CR_MAPLE(MaPLe):
     def build_model(self):
         super().build_model()
+        # self.optim = build_optimizer(self.model, self.cfg.OPTIM)
         self.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
         self.optim.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
         self.optim.noise_last_epochs = self.cfg.CSGHMC.NOISE_LAST_EPOCHS
@@ -38,6 +39,12 @@ class CSGHMC_CR_MAPLE(MaPLe):
         # self.cycles_state_dict = {}
         if self.cfg.CSGHMC.CHAINS == "parallel":
             # self.initial_state_dict = copy.deepcopy(self.model.state_dict())
+            for name, params in self.model.named_parameters():
+                if params.requires_grad:
+                    if params.dim() > 1:
+                        print("Parameter to be optimized:", name, params[0][:5])
+                    else:
+                        print("Parameter to be optimized:", name, params[0])
             save_dir = Path(self.cfg.OUTPUT_DIR) / f"initial_checkpoints"
             model_name = "model-best.pth.tar"
             self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
@@ -87,6 +94,7 @@ class CSGHMC_CR_MAPLE(MaPLe):
 
             torch.set_rng_state(rng_state)
         super().run_epoch()
+        print(f"c {self.epoch}, cycle_length: {cycle_length}, current_cycle: {self.current_cycle}")
         if cycle_length > 0 and (self.epoch + 1) % cycle_length == 0 and self.epoch > 0 or (self.epoch + 1) == self.cfg.OPTIM.MAX_EPOCH:
             print(f'self.epoch: {self.epoch}, cycle_length: {cycle_length}, current_cycle: {self.current_cycle}, max_epoch: {self.cfg.OPTIM.MAX_EPOCH}')
             for i, weights in enumerate(self.last_cycle_samples):
@@ -127,15 +135,30 @@ class CSGHMC_CR_MAPLE(MaPLe):
                 #         if layer.bias is not None:
                 #             torch.nn.init.zeros_(layer.bias)
                 # self.model.load_state_dict(self.initial_state_dict) ### TE REMOVE !! ! ! ! ! ! 
+                
                 super().load_model(self.initial_checkpoint, epoch=None) 
+                super().build_model()
+                for name, params in self.model.named_parameters():
+                    if params.requires_grad:
+                        if params.dim() > 1:
+                            print("Parameter to be optimized:", name, params[0][:5])
+                        else:
+                            print("Parameter to be optimized:", name, params[0])
                 self.model.train()
                 torch.set_rng_state(self.rng_state)
-                self.optim = build_optimizer(self.model, self.cfg.OPTIM)
+                # self.optim = build_optimizer(self.model, self.cfg.OPTIM)
                 self.optim.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
                 self.optim.noise_last_epochs = self.cfg.CSGHMC.NOISE_LAST_EPOCHS
                 self.optim.noise_temperature = self.cfg.CSGHMC.NOISE_TEMPERATURE
                 self.optim.dataset_size = len(self.train_loader_x.dataset)  # for noise calculation
                 self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
+        else:
+            for name, params in self.model.named_parameters():
+                if params.requires_grad:
+                    if params.dim() > 1:
+                        print("[Not CYCLE Reset] Parameter to be optimized:", name, params[0][:5])
+                    else:
+                        print("[Not CYCLE Reset] Parameter to be optimized:", name, params[0])
     def model_inference(self, input): # return average logits over all models
         logits = 0
         for model in self.models:
@@ -191,7 +214,6 @@ class CSGHMC_CR_MAPLE(MaPLe):
 
             if self.repulsion_strength > 0 and self.current_cycle > 0:
                 self._add_repulsion_gradients()
-
             scaler.step(optim)
             scaler.update()
         else:
@@ -205,9 +227,13 @@ class CSGHMC_CR_MAPLE(MaPLe):
         loss_summary = {"loss": loss.item()}
         # collect samples at the end of each cycle
         cycle_epoch = (self.epoch + 1) % self.cycle_length
-        if cycle_epoch == 0 and self.batch_idx == 2:
+        if cycle_epoch == 0 and self.batch_idx == 0:
             print(f"DEBUG: cycle_epoch: {cycle_epoch}, self.epoch: {self.epoch}, batch_idx: {self.batch_idx}, num_batches: {self.num_batches}")
             print(f"loss: {loss.item()}")
+            print(f"image: {image[0][0][:10]}")
+            print(f"label: {label[0]}")
+
+
         if self.noise_last_epochs == 0 or self.samples_per_cycle == 1: 
             # if last batch of last epoch in cycle, collect sample
             if cycle_epoch == 0 and (self.batch_idx + 1) == self.num_batches: 
