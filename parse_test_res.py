@@ -179,7 +179,6 @@ def parse_function(*metrics, directory="", args=None, end_signal=None):
                         num = float(match.group(1))
                         name = metric["name"]
                         output[name] = num
-
         if output:
             outputs.append(output)
 
@@ -467,7 +466,7 @@ if __name__ == "__main__":
         help="Dataset name (e.g., imagenet, caltech101). Required for base2new structure."
     )
     parser.add_argument(
-        "--shots", type=int, default=None,
+        "--shots", type=int, default=16,
         help="Number of shots (e.g., 1, 2, 4, 8, 16). Required for base2new structure."
     )
     parser.add_argument(

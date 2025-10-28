@@ -54,7 +54,7 @@ class SGHMC(torch.optim.SGD):
                         # noise_std = math.sqrt(2 * weight_decay * current_lr)
                         # buf_new += (2.0*lr*args.alpha*args.temperature/datasize)**.5*eps
                         noise_std = (2.0 * current_lr * momentum)**0.5 / self.dataset_size
-                        noise = torch.randn_like(param) * noise_std # * self.noise_temperature
+                        noise = torch.randn_like(param) * noise_std * self.noise_temperature
                         buf.add_(noise)
 
                 # Update parameters
