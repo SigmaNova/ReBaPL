@@ -218,7 +218,7 @@ class MaPLe(TrainerX):
     def check_cfg(self, cfg):
         assert cfg.TRAINER.MAPLE.PREC in ["fp16", "fp32", "amp"]
 
-    def build_model(self):
+    def build_model(self, first_build=True, optim=None, sched=None):
         cfg = self.cfg
         classnames = self.dm.dataset.classnames
 
@@ -255,9 +255,14 @@ class MaPLe(TrainerX):
 
         self.model.to(self.device)
         # NOTE: only give prompt_learner to the optimizer
-        self.optim = build_optimizer(self.model, cfg.OPTIM)
-        self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
-        self.register_model("MultiModalPromptLearner", self.model, self.optim, self.sched)
+        self.optim = build_optimizer(self.model, cfg.OPTIM) if optim is None else optim
+        self.sched = build_lr_scheduler(self.optim, cfg.OPTIM) if sched is None else sched
+        if first_build:
+            self.register_model("MultiModalPromptLearner", self.model, self.optim, self.sched)
+        else:
+            self._models["MultiModalPromptLearner"] = self.model
+            self._optims["MultiModalPromptLearner"] = self.optim
+            self._scheds["MultiModalPromptLearner"] = self.sched
         self.scaler = GradScaler() if cfg.TRAINER.MAPLE.PREC == "amp" else None
 
         # Note that multi-gpu training could be slow because CLIP's size is
