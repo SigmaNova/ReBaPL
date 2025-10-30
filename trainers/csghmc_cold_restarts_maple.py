@@ -5,8 +5,8 @@ from torch.utils.data import DataLoader
 
 from dassl.engine import TRAINER_REGISTRY
 from .schedulers import build_lr_scheduler
-# from .optimizers import build_optimizer
-from dassl.optim import build_optimizer
+from .optimizers import build_optimizer
+# from dassl.optim import build_optimizer
 from dassl.utils import load_checkpoint
 
 import copy
@@ -30,20 +30,28 @@ from .representation_tracker import RepresentationTracker
 class CSGHMC_CR_MAPLE(MaPLe):
     def build_model(self):
         super().build_model()
+        # self.optim = build_optimizer(self.model, self.cfg.OPTIM)
         self.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
         self.optim.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
         self.optim.noise_last_epochs = self.cfg.CSGHMC.NOISE_LAST_EPOCHS
         self.optim.noise_temperature = self.cfg.CSGHMC.NOISE_TEMPERATURE
         self.optim.dataset_size = len(self.train_loader_x.dataset)  # for noise calculation
-        # self.cycles_state_dict = {}
+        self.initial_model = copy.deepcopy(self.model)
+        self.initial_optim = copy.deepcopy(self.optim)
+        self.rng_state = torch.get_rng_state()
+
         if self.cfg.CSGHMC.CHAINS == "parallel":
-            self.initial_state_dict = copy.deepcopy(self.model.state_dict())
+            save_dir = Path(self.cfg.OUTPUT_DIR) / f"initial_checkpoints"
+            model_name = "model-best.pth.tar"
+            self.save_model(self.epoch, save_dir, is_best=False, model_name=model_name)
+            self.initial_checkpoint = save_dir
             lr_scheduler = "cosine"
         else: 
             lr_scheduler = "cosine_restart"
 
         self.lr_scheduler_type = lr_scheduler
         self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, lr_scheduler, cycle_length=self.cycle_length, max_epoch=self.cycle_length)
+        self._scheds["MultiModalPromptLearner"] = self.sched
         self.models = []
         
         #### Repulsion between cycles ####
@@ -68,6 +76,7 @@ class CSGHMC_CR_MAPLE(MaPLe):
         if self.epoch == 0 and self.representation_tracker.reference_samples is None:
             
             rng_state = torch.get_rng_state()
+            self.rng_state = rng_state
 
             train_dataset = self.train_loader_x.dataset
             ref_loader = DataLoader(
@@ -82,6 +91,7 @@ class CSGHMC_CR_MAPLE(MaPLe):
 
             torch.set_rng_state(rng_state)
         super().run_epoch()
+        print(f"c {self.epoch}, cycle_length: {cycle_length}, current_cycle: {self.current_cycle}")
         if cycle_length > 0 and (self.epoch + 1) % cycle_length == 0 and self.epoch > 0 or (self.epoch + 1) == self.cfg.OPTIM.MAX_EPOCH:
             print(f'self.epoch: {self.epoch}, cycle_length: {cycle_length}, current_cycle: {self.current_cycle}, max_epoch: {self.cfg.OPTIM.MAX_EPOCH}')
             for i, weights in enumerate(self.last_cycle_samples):
@@ -103,27 +113,43 @@ class CSGHMC_CR_MAPLE(MaPLe):
 
             ######## Parallel Chains ########
             if self.cfg.CSGHMC.CHAINS == "parallel":
-                print("Using parallel chains: reinitializing prompt weights randomly.")
+                super().build_model(first_build=False)
+                # self.model = copy.deepcopy(self.initial_model)
+                # print("Using parallel chains: reinitializing prompt weights randomly.")
                 # Reinitialize prompt learner parameters instead of loading initial state
-                prompt_learner = self.model.prompt_learner
-                
-                # Reinitialize main context vectors (shallow prompts)
-                torch.nn.init.normal_(prompt_learner.ctx, std=0.02)
-                
+                # prompt_learner = self.model.prompt_learner
+                # # Reinitialize main context vectors (shallow prompts)
+                # torch.nn.init.normal_(prompt_learner.ctx, std=0.02)
                 # Reinitialize compound prompts (deeper layers)
-                for param in prompt_learner.compound_prompts_text:
-                    torch.nn.init.normal_(param, std=0.02)
+                # for param in prompt_learner.compound_prompts_text:
+                #     torch.nn.init.normal_(param, std=0.02)
                 
-                # Reinitialize projection layers
-                for layer in [prompt_learner.proj] + list(prompt_learner.compound_prompt_projections):
-                    if isinstance(layer, torch.nn.Linear):
-                        torch.nn.init.xavier_uniform_(layer.weight)
-                        if layer.bias is not None:
-                            torch.nn.init.zeros_(layer.bias)
-
-                self.model.train()
-                self.optim.state.clear()  # Clear all accumulated state
+                # # # Reinitialize projection layers
+                # for layer in [prompt_learner.proj] + list(prompt_learner.compound_prompt_projections):
+                #     if isinstance(layer, torch.nn.Linear):
+                #         torch.nn.init.xavier_uniform_(layer.weight)
+                #         if layer.bias is not None:
+                #             torch.nn.init.zeros_(layer.bias)
+                # self.model.load_state_dict(self.initial_state_dict) ### TE REMOVE !! ! ! ! ! ! 
+                
+                # super().load_model(self.initial_checkpoint, epoch=None) 
+                
+                self.optim = build_optimizer(self.model, self.cfg.OPTIM)
                 self.sched = build_lr_scheduler(self.optim, self.cfg.OPTIM, "cosine", cycle_length=None, max_epoch=self.cycle_length)
+                self.model.train()
+                # torch.set_rng_state(self.rng_state) # Leave commented if you don't want the same randomness across chains
+                # self.optim = build_optimizer(self.model, self.cfg.OPTIM)
+                self.optim.cycle_length = self.cfg.CSGHMC.CYCLE_LENGTH
+                self.optim.noise_last_epochs = self.cfg.CSGHMC.NOISE_LAST_EPOCHS
+                self.optim.noise_temperature = self.cfg.CSGHMC.NOISE_TEMPERATURE
+                self.optim.dataset_size = len(self.train_loader_x.dataset)  # for noise calculation
+                
+                self._models["MultiModalPromptLearner"] = self.model
+                self._optims["MultiModalPromptLearner"] = self.optim
+                self._scheds["MultiModalPromptLearner"] = self.sched
+                print(f"[DEBUG]: Param CTX mean after reinit: {self.model.prompt_learner.ctx.data.mean()}, std: {self.model.prompt_learner.ctx.data.std()}")
+                for param in self.model.prompt_learner.compound_prompts_text:
+                    print(f"[DEBUG]: Param mean after reinit: {param.data.mean()}, std: {param.data.std()}")
 
     def model_inference(self, input): # return average logits over all models
         logits = 0
@@ -180,7 +206,6 @@ class CSGHMC_CR_MAPLE(MaPLe):
 
             if self.repulsion_strength > 0 and self.current_cycle > 0:
                 self._add_repulsion_gradients()
-
             scaler.step(optim)
             scaler.update()
         else:
@@ -194,19 +219,27 @@ class CSGHMC_CR_MAPLE(MaPLe):
         loss_summary = {"loss": loss.item()}
         # collect samples at the end of each cycle
         cycle_epoch = (self.epoch + 1) % self.cycle_length
+        if cycle_epoch == 0 and self.batch_idx == 0:
+            print(f"DEBUG: cycle_epoch: {cycle_epoch}, self.epoch: {self.epoch}, batch_idx: {self.batch_idx}, num_batches: {self.num_batches}")
+            print(f"loss: {loss.item()}")
 
-        if cycle_epoch >= self.cycle_length - self.noise_last_epochs: #  
-
-            # Compute remaining number of steps in this cycle
-            steps_in_cycle = self.noise_last_epochs * self.num_batches
-            current_step_in_cycle = (cycle_epoch * self.num_batches) + self.batch_idx + 1
-            
-            # collect uniformly spaced samples
-            if self.samples_per_cycle > 0 and len(self.last_cycle_samples) < self.samples_per_cycle:
-                interval = steps_in_cycle // self.samples_per_cycle
-                if (current_step_in_cycle - (self.cycle_length - self.noise_last_epochs) * self.num_batches) % interval == 0:
-                    print(f"Collecting sample at epoch {self.epoch}, batch {self.batch_idx}")
-                    self.last_cycle_samples.append(copy.deepcopy(self.model.state_dict()))
+        if self.noise_last_epochs == 0 or self.samples_per_cycle == 1: 
+            # if last batch of last epoch in cycle, collect sample
+            if cycle_epoch == 0 and (self.batch_idx + 1) == self.num_batches: 
+                print(f"Collecting sample at epoch {self.epoch}, batch {self.batch_idx}")
+                self.last_cycle_samples.append(copy.deepcopy(self.model.state_dict()))
+        else:
+            if cycle_epoch >= self.cycle_length - self.noise_last_epochs: #  
+                # Compute remaining number of steps in this cycle
+                steps_in_cycle = self.noise_last_epochs * self.num_batches
+                current_step_in_cycle = (cycle_epoch * self.num_batches) + self.batch_idx + 1
+                
+                # collect uniformly spaced samples
+                if self.samples_per_cycle > 0 and len(self.last_cycle_samples) < self.samples_per_cycle:
+                    interval = steps_in_cycle // self.samples_per_cycle
+                    if (current_step_in_cycle - (self.cycle_length - self.noise_last_epochs) * self.num_batches) % interval == 0:
+                        print(f"Collecting sample at epoch {self.epoch}, batch {self.batch_idx}")
+                        self.last_cycle_samples.append(copy.deepcopy(self.model.state_dict()))
         if (self.batch_idx + 1) == self.num_batches:
             self.update_lr()
 
