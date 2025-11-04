@@ -102,7 +102,9 @@ class MultiModalPromptLearner(nn.Module):
         # These below, related to the shallow prompts
         # Linear layer so that the tokens will project to 512 and will be initialized from 768
         self.proj = nn.Linear(ctx_dim, 768)
-        self.proj.half()
+        if cfg.TRAINER.MAPLE.PREC == "fp16":
+            self.proj.half()
+
         self.ctx = nn.Parameter(ctx_vectors)
         # These below parameters related to the shared prompts
         # Define the compound prompts for the deeper layers
