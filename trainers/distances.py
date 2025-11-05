@@ -49,3 +49,20 @@ def mmd_distance(
 
     mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
     return mmd
+
+
+def procrustes_distance(
+    z0: torch.Tensor,
+    z1: torch.Tensor,
+    **kwargs  # Put your extra arguments here
+) -> torch.Tensor:
+    """Your implementation here
+
+    Parameters
+    ----------
+    z0: torch.Tensor
+        Torch tensor of shape (n, d)
+    z1: torch.Tensor
+        Torch tensor of shape (n, d)
+    """
+    pass
