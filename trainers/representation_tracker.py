@@ -153,6 +153,8 @@ class RepresentationTracker:
             torch.Tensor: A scalar tensor representing the repulsion potential between the two representations.
         """
         eps = 1e-6
+
+        print(current_repr.shape, past_repr.shape)
         
         if self.distance == 'mse':
             dist = mse_potential(current_repr, past_repr).mean()
