@@ -52,7 +52,8 @@ class RepresentationTracker:
             if len(torch.cat(ref_samples, dim=0)) >= self.num_ref_samples:
                 break
         
-        self.reference_samples = torch.cat(ref_samples, dim=0)[:self.num_ref_samples].to(torch.half)
+        # self.reference_samples = torch.cat(ref_samples, dim=0)[:self.num_ref_samples].to(torch.half)
+        self.reference_samples = torch.cat(ref_samples, dim=0)[:self.num_ref_samples]
             
         if use_cuda:
             self.reference_samples = self.reference_samples.cuda()
@@ -152,10 +153,11 @@ class RepresentationTracker:
         Returns:
             torch.Tensor: A scalar tensor representing the repulsion potential between the two representations.
         """
-        eps = 1e-6
+        eps = 1e-6  # Small constant for numerical stability
 
-        print(current_repr.shape, past_repr.shape)
-        
+        current_repr = current_repr.float()
+        past_repr = past_repr.float()
+
         if self.distance == 'mse':
             dist = mse_potential(current_repr, past_repr).mean()
         elif self.distance == 'wasserstein':
@@ -164,10 +166,10 @@ class RepresentationTracker:
             dist = mmd_distance(current_repr, past_repr)
         else:
             raise ValueError(f"Unknown distance metric: {self.distance}")
-        potential = torch.reciprocal(dist + eps)
+        potential = repulsion_strength / (dist + eps)
 
         # Simple: force proportional to difference (like springs)
-        return repulsion_strength * potential  # Pushes away proportionally
+        return potential  # Pushes away proportionally
     
         # if current_repr.shape != past_repr.shape:
         #     min_samples = min(current_repr.shape[0], past_repr.shape[0])
