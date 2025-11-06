@@ -253,7 +253,7 @@ class CSGHMC_CR_MAPLE(MaPLe):
             current_cycle=self.current_cycle,
             repulsion_strength=self.repulsion_strength
         )
-
+        
         average_grad_norm = 0.0
         if repulsion_grads:
             # Add repulsion gradients to existing gradients

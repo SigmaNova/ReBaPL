@@ -4,7 +4,8 @@ from typing import Optional, Dict, Literal
 from trainers.distances import (
     mse_potential,
     wasserstein_distance,
-    mmd_distance
+    mmd_distance,
+    procrustes_distance
 )
 
 use_cuda = torch.cuda.is_available()
@@ -102,7 +103,6 @@ class RepresentationTracker:
         force_potential = self.compute_repulsion_matrix(current_repr, past_repr, repulsion_strength)
         
         grad_params = [p for p in net.parameters() if p.requires_grad]
-        
         param_grads = torch.autograd.grad(
             outputs=force_potential,
             inputs=grad_params,
@@ -164,10 +164,11 @@ class RepresentationTracker:
             dist = wasserstein_distance(current_repr, past_repr)
         elif self.distance == 'mmd':
             dist = mmd_distance(current_repr, past_repr)
+        elif self.distance == 'procrustes':
+            dist = procrustes_distance(current_repr, past_repr)
         else:
             raise ValueError(f"Unknown distance metric: {self.distance}")
         potential = repulsion_strength / (dist + eps)
-
         # Simple: force proportional to difference (like springs)
         return potential  # Pushes away proportionally
     
