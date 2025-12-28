@@ -3,7 +3,7 @@
 #cd ../..
 
 # custom config
-DATA="/home/gamerx/Documents/datasets"
+DATA=~/datasets/
 TRAINER=MaPLe
 
 DATASET=$1
@@ -30,8 +30,8 @@ if [ -d "$DIR" ]; then
     --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
     --output-dir ${DIR} \
     --model-dir ${MODEL_DIR} \
-    --load-epoch ${LOADEP} \
     --eval-only \
+    --load-epoch ${LOADEP} \
     DATASET.NUM_SHOTS ${SHOTS} \
     DATASET.SUBSAMPLE_CLASSES ${SUB}
 

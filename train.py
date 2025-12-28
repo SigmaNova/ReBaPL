@@ -33,6 +33,8 @@ import trainers.csghmc  # custom
 import trainers.app
 import trainers.vpt
 from trainers.csghmc_cold_restarts import CSGHMC_CR  # custom
+from trainers.csghmc_cold_restarts_maple import CSGHMC_CR_MAPLE  # custom
+
 
 def print_args(args, cfg):
     print("***************")
@@ -149,6 +151,7 @@ def extend_cfg(cfg):
     cfg.CSGHMC.REPULSION.REG_STRENGTH = 1e-6
     cfg.CSGHMC.REPULSION.BATCH_SIZE = 1
     cfg.CSGHMC.CHAINS = "parallel"  # independent or parallel
+    cfg.CSGHMC.REPULSION.DISTANCE_TYPE = "mse"  # euclidean, wasserstein, mmd
 
     cfg.TRAINER.APP = CN()
     cfg.TRAINER.APP.N_CTX = 16  # number of context vectors
@@ -199,7 +202,7 @@ def main(args):
     setup_logger(cfg.OUTPUT_DIR)
 
     if torch.cuda.is_available() and cfg.USE_CUDA:
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = True  # type: ignore
 
     print_args(args, cfg)
     print("Collecting env info ...")

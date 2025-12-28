@@ -3,8 +3,8 @@
 #cd ../..
 
 # custom config
-DATA=~/datasets
-TRAINER=CSGHMC_CR_MAPLE
+DATA=/home/ubuntu/omar/prompt_learning/datasets
+TRAINER=CSGHMC_CR_MAPLE_WR
 
 DATASET=$1
 SEED=$2
@@ -14,7 +14,6 @@ SUB=new
 
 DIR=output/base2new/train_base/${DATASET}/shots_${SHOTS}/${TRAINER}/${CFG}/seed${SEED}
 
-echo "** python train.py invocation:"
 echo "python train.py \
 --root ${DATA} \
 --seed ${SEED} \

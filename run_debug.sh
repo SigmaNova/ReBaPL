@@ -25,6 +25,6 @@ if [ "$overwrite" = "true" ]; then
 fi
 
 CUDA_VISIBLE_DEVICES=$DEVICE bash ./scripts/${trainer}/base2new_train.sh $dataset $seed $CFG
-CUDA_VISIBLE_DEVICES=$DEVICE bash ./scripts/${trainer}/base2new_test.sh $dataset $seed $CFG
+# CUDA_VISIBLE_DEVICES=$DEVICE bash ./scripts/${trainer}/base2new_test.sh $dataset $seed $CFG
 # CUDA_VISIBLE_DEVICES=$DEVICE ./scripts/${trainer}/base2new_train_maple.sh $dataset $seed
 # CUDA_VISIBLE_DEVICES=$DEVICE ./scripts/${trainer}/base2new_test_maple.sh $dataset $seed

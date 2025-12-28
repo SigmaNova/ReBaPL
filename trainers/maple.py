@@ -102,7 +102,9 @@ class MultiModalPromptLearner(nn.Module):
         # These below, related to the shallow prompts
         # Linear layer so that the tokens will project to 512 and will be initialized from 768
         self.proj = nn.Linear(ctx_dim, 768)
-        self.proj.half()
+        if cfg.TRAINER.MAPLE.PREC == "fp16":
+            self.proj.half()
+
         self.ctx = nn.Parameter(ctx_vectors)
         # These below parameters related to the shared prompts
         # Define the compound prompts for the deeper layers
@@ -187,7 +189,7 @@ class CustomCLIP(nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
 
-    def forward(self, image, label=None):
+    def forward(self, image, label=None, return_text_features=False):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
@@ -198,6 +200,10 @@ class CustomCLIP(nn.Module):
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         logits = logit_scale * image_features @ text_features.t()
+
+        if return_text_features:
+            cat_vector = torch.cat([image_features, text_features], dim=0)
+            return logits, cat_vector
 
         if self.prompt_learner.training:
             return F.cross_entropy(logits, label)
@@ -214,7 +220,7 @@ class MaPLe(TrainerX):
     def check_cfg(self, cfg):
         assert cfg.TRAINER.MAPLE.PREC in ["fp16", "fp32", "amp"]
 
-    def build_model(self):
+    def build_model(self, first_build=True, optim=None, sched=None):
         cfg = self.cfg
         classnames = self.dm.dataset.classnames
 
@@ -251,10 +257,14 @@ class MaPLe(TrainerX):
 
         self.model.to(self.device)
         # NOTE: only give prompt_learner to the optimizer
-        self.optim = build_optimizer(self.model, cfg.OPTIM)
-        self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
-        self.register_model("MultiModalPromptLearner", self.model, self.optim, self.sched)
-
+        self.optim = build_optimizer(self.model, cfg.OPTIM) if optim is None else optim
+        self.sched = build_lr_scheduler(self.optim, cfg.OPTIM) if sched is None else sched
+        if first_build:
+            self.register_model("MultiModalPromptLearner", self.model, self.optim, self.sched)
+        else:
+            self._models["MultiModalPromptLearner"] = self.model
+            self._optims["MultiModalPromptLearner"] = self.optim
+            self._scheds["MultiModalPromptLearner"] = self.sched
         self.scaler = GradScaler() if cfg.TRAINER.MAPLE.PREC == "amp" else None
 
         # Note that multi-gpu training could be slow because CLIP's size is

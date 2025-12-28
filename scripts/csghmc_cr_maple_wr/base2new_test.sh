@@ -3,8 +3,8 @@
 #cd ../..
 
 # custom config
-DATA=~/datasets
-TRAINER=CSGHMC_CR_MAPLE
+DATA=/home/ubuntu/omar/prompt_learning/datasets
+TRAINER=CSGHMC_CR_MAPLE_WR
 
 DATASET=$1
 SEED=$2
