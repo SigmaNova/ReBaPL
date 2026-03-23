@@ -119,22 +119,21 @@ python parse_test_res.py output/base2new/test_new/eurosat/shots_16/CSGHMC_CR_MAP
 
 ## Key Configuration
 
-The main config file is [configs/trainers/CSGHMC_CR_MAPLE/vit_b16.yaml](configs/trainers/CSGHMC_CR_MAPLE/vit_b16.yaml). Key hyperparameters:
+The main config files are in [configs/trainers/CSGHMC_CR_MAPLE/](configs/trainers/CSGHMC_CR_MAPLE/). Below are the hyperparameters used in our experiments (Table 1 of the paper):
 
-| Parameter | Default | Description |
+| Hyperparameter | MaPLe + ReBaPL | MMRL + ReBaPL |
 |---|---|---|
-| `OPTIM.NAME` | `sghmc` | Optimizer (Stochastic Gradient HMC) |
-| `OPTIM.LR` | `0.002` | Learning rate |
-| `OPTIM.MAX_EPOCH` | `15` | Total training epochs |
-| `CSGHMC.CYCLE_LENGTH` | `5` | Epochs per cycle (3 cycles total) |
-| `CSGHMC.NOISE_LAST_EPOCHS` | `3` | Epochs with noise injection per cycle |
-| `CSGHMC.NOISE_TEMPERATURE` | `100.0` | Noise scaling factor |
-| `CSGHMC.CHAINS` | `sequential` | Chain mode (`sequential` or `parallel`) |
-| `CSGHMC.REPULSION.REPULSION_STRENGTH` | `0.75` | Repulsive force scaling |
-| `CSGHMC.REPULSION.BATCH_SIZE` | `5` | Mini-batch size for repulsion gradient |
-| `CSGHMC.REPULSION.DISTANCE_TYPE` | `mse` | Distance metric (`mse`, `wasserstein`, `mmd`) |
-| `TRAINER.MAPLE.N_CTX` | `2` | Number of context tokens |
-| `TRAINER.MAPLE.PROMPT_DEPTH` | `9` | Depth of deep prompts in transformer |
+| Learning rate *α* | 0.002 | 0.001 |
+| Batch size *b* | 1 | 4 |
+| Epochs per cycle *T* | 5 | 5 |
+| # Cycles *C* | 3 | 3 |
+| Samples per cycle *K* | 1 | 1 |
+| Repulsion strength *ξ* | 0.001 | 10⁻⁴ |
+| Repulsion batch size *n* | 32 | 64 |
+| Distance | MMD | Wasserstein |
+| Algorithm | rcSGHMC | rcSGHMC |
+| Weight decay | 5e-4 | 5e-4 |
+| Random seed | [1, 2, 3] | [1, 2, 3] |
 
 <hr>
 
