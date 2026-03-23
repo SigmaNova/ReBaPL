@@ -3,7 +3,7 @@
 ### CVPR 2026
 
 > **ReBaPL: Repulsive Bayesian Prompt Learning**<br>
-> Yassir Bendou\*, Omar Ezzahir\*, Eduardo Fernandes Montesuma, Gabriel Mahuas, Victoria Shevchenko, Mike Gartrell<br>
+> Yassir Bendou\*, Omar Ezzahir\*, Eduardo Fernandes Montesuma\*, Gabriel Mahuas, Victoria Shevchenko, Mike Gartrell<br>
 > _\* Equal contribution_
 
 [[Paper]](https://arxiv.org/abs/2511.17339)
